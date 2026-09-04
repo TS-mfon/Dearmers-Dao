@@ -9,6 +9,10 @@ import { evaluateWithDearmers, setDearmersConstitution, setEvaluatorAddress } fr
 import { CreateOrganisationWizard } from "./components/forge/CreateOrganisationWizard";
 import { ExplorerPage } from "./pages/ExplorerPage";
 import { DaoDetailPage } from "./pages/DaoDetailPage";
+import { ProfilePage } from "./pages/ProfilePage";
+import { NotificationsPage } from "./pages/NotificationsPage";
+import { ProtocolAdminPage } from "./pages/ProtocolAdminPage";
+import { GrantAssemblyPage } from "./pages/GrantAssemblyPage";
 import "./App.css";
 
 const statusNames = ["Pending review", "Revision required", "Voting", "Rejected", "Approved", "Executed", "Escalated", "Paused"];
@@ -67,6 +71,10 @@ function App() {
     <Route path="/sanctuary" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/explorer" element={<ExplorerPage daos={daos} />} />
     <Route path="/dao/:daoId" element={<DaoDetailPage daos={daos} account={account} onNotice={setNotice} />} />
+    <Route path="/profile/:wallet" element={<ProfilePage account={account} onNotice={setNotice} />} />
+    <Route path="/profile" element={<ProfilePage account={account} onNotice={setNotice} />} />
+    <Route path="/notifications" element={<NotificationsPage account={account} onNotice={setNotice} />} />
+    <Route path="/__protocol" element={<ProtocolAdminPage account={account} onNotice={setNotice} />} />
     <Route path="/forge" element={<WorkspacePage title="Forge a Covenant" eyebrow="COVENANT INCEPTION" icon={<Landmark />} account={account} daos={daos} selected={selected} setSelected={setSelected} notice={notice} refresh={refresh} connect={connect} busy={busy}>
       <CreateOrganisationWizard account={account} onBusy={setBusy} onNotice={setNotice} onCreated={created} />
     </WorkspacePage>} />
@@ -79,15 +87,13 @@ function App() {
     <Route path="/council" element={<WorkspacePage title="Council Registry" eyebrow="INITIATES & CONVICTION" icon={<Users />} account={account} daos={daos} selected={selected} setSelected={setSelected} notice={notice} refresh={refresh} connect={connect} busy={busy}>
       {selected ? <><WorkspaceMasthead selected={selected} proposalCount={proposalCount} /><div className="action-grid"><MembershipForm dao={selected.dao} onBusy={setBusy} onNotice={setNotice} /><ProfileForm account={account} onBusy={setBusy} onNotice={setNotice} /></div></> : <SelectDao />}
     </WorkspacePage>} />
-    <Route path="/grants" element={<WorkspacePage title="Grant Assembly" eyebrow="EVIDENCE-LED ALLOCATION" icon={<Brain />} account={account} daos={daos} selected={selected} setSelected={setSelected} notice={notice} refresh={refresh} connect={connect} busy={busy}>
-      {selected?.mode === 1 ? <><WorkspaceMasthead selected={selected} proposalCount={proposalCount} /><GrantForm dao={selected.dao} onBusy={setBusy} onNotice={setNotice} /></> : <SelectGrantDao />}
-    </WorkspacePage>} />
+    <Route path="/grants" element={<GrantAssemblyPage daos={daos} account={account} onConnect={connect} onBusy={setBusy} onNotice={setNotice} />} />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
 }
 
 type WorkspaceProps = { title: string; eyebrow: string; icon: React.ReactNode; account: Address | ""; daos: DaoRecord[]; selected: DaoRecord | null; setSelected: (dao: DaoRecord) => void; notice: Notice; refresh: () => Promise<void>; connect: () => Promise<void>; busy: string; children: React.ReactNode };
-function WorkspacePage({ title, eyebrow, icon, account, daos, selected, setSelected, notice, refresh, connect, children }: WorkspaceProps) { return <div className="dearmers-shell workspace-shell"><header className="dearmers-header"><Link className="brand-lockup" to="/sanctuary"><span className="brand-mark">◈</span><span><span className="eyebrow">SOVEREIGN OPERATING ENGINE</span><h1>Dearmers<span>-Dao</span></h1></span></Link><nav className="protocol-nav" aria-label="Primary"><Link to="/explorer">Explore</Link><Link to="/sanctuary">Sanctuary</Link><Link to="/forge">Forge</Link><Link to="/governance">Governance</Link><Link to="/grants">Grants</Link></nav><div className="header-actions"><button className="ghost-button" onClick={() => void refresh()}><RefreshCw size={16}/> Refresh</button><button className="primary-button" onClick={() => void connect()}><Wallet size={16}/>{account ? `${account.slice(0, 6)}…${account.slice(-4)}` : "Enter sanctuary"}</button></div></header><div className={`notice ${notice.tone}`}>{notice.text}</div><div className="page-banner"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><span className="page-symbol">{icon}</span></div><main className="dearmers-grid"><aside className="dao-sidebar"><div className="panel-title"><Building2 size={17}/> SOVEREIGN DAOS</div><Link className="sidebar-forge" to="/forge">+ Forge a covenant</Link><Link className="sidebar-forge" to="/explorer">Discover covenants →</Link><div className="dao-list">{daos.map((dao) => <button key={dao.daoId} className={`dao-card ${selected?.daoId === dao.daoId ? "active" : ""}`} onClick={() => setSelected(dao)}><strong>{dao.name}</strong><span>{dao.mode === 1 ? "Grant DAO" : "Operating DAO"}</span><small>{dao.dao.slice(0, 8)}…{dao.dao.slice(-6)}</small></button>)}{!daos.length && <p className="empty">No DAOs registered yet. Forge the first covenant.</p>}</div></aside><section className="workspace">{children}</section></main></div>; }
+function WorkspacePage({ title, eyebrow, icon, account, daos, selected, setSelected, notice, refresh, connect, children }: WorkspaceProps) { return <div className="dearmers-shell workspace-shell"><header className="dearmers-header"><Link className="brand-lockup" to="/sanctuary"><span className="brand-mark">◈</span><span><span className="eyebrow">SOVEREIGN OPERATING ENGINE</span><h1>Dearmers<span>-Dao</span></h1></span></Link><nav className="protocol-nav" aria-label="Primary"><Link to="/explorer">Explore</Link><Link to="/sanctuary">Sanctuary</Link><Link to="/forge">Forge</Link><Link to="/governance">Governance</Link><Link to="/grants">Grants</Link><Link to="/notifications">Signals</Link></nav><div className="header-actions"><Link className="ghost-button" to={account ? `/profile/${account}` : "/profile"}>Profile</Link><button className="ghost-button" onClick={() => void refresh()}><RefreshCw size={16}/> Refresh</button><button className="primary-button" onClick={() => void connect()}><Wallet size={16}/>{account ? `${account.slice(0, 6)}…${account.slice(-4)}` : "Enter sanctuary"}</button></div></header><div className={`notice ${notice.tone}`}>{notice.text}</div><div className="page-banner"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><span className="page-symbol">{icon}</span></div><main className="dearmers-grid"><aside className="dao-sidebar"><div className="panel-title"><Building2 size={17}/> SOVEREIGN DAOS</div><Link className="sidebar-forge" to="/forge">+ Forge a covenant</Link><Link className="sidebar-forge" to="/explorer">Discover covenants →</Link><div className="dao-list">{daos.map((dao) => <button key={dao.daoId} className={`dao-card ${selected?.daoId === dao.daoId ? "active" : ""}`} onClick={() => setSelected(dao)}><strong>{dao.name}</strong><span>{dao.mode === 1 ? "Grant DAO" : "Operating DAO"}</span><small>{dao.dao.slice(0, 8)}…{dao.dao.slice(-6)}</small></button>)}{!daos.length && <p className="empty">No DAOs registered yet. Forge the first covenant.</p>}</div></aside><section className="workspace">{children}</section></main></div>; }
 function WorkspaceMasthead({ selected, proposalCount }: { selected: DaoRecord; proposalCount: bigint }) { return <><div className="workspace-heading"><div><span className="eyebrow">{selected.mode === 1 ? "GRANT DAO" : "OPERATING DAO"}</span><h3>{selected.name}</h3><p>{selected.dao}</p></div><div className="pill">Treasury {selected.treasury.slice(0, 8)}…</div></div><div className="metric-row"><Metric icon={<FileCheck2/>} label="Sacred decrees" value={proposalCount.toString()}/><Metric icon={<ShieldCheck/>} label="Constitution" value="Versioned"/><Metric icon={<CircleDollarSign/>} label="Treasury" value="Isolated"/><Metric icon={<Brain/>} label="Review" value="GenLayer"/></div></>; }
 function SelectDao() { return <div className="select-state"><Building2 size={34}/><h3>Select a sovereign DAO</h3><p>Choose a covenant from the left rail to enter its chamber.</p></div>; }
 function SelectGrantDao() { return <div className="select-state"><Brain size={34}/><h3>This is not a Grant DAO</h3><p>Choose a grant fund or forge one at the covenant inception page.</p></div>; }
@@ -127,5 +133,7 @@ function ProposalBoard({ dao, proposals, account, onBusy, onNotice, onDone }: {d
 function Panel({ title, icon, children }: {title:string;icon:React.ReactNode;children:React.ReactNode}) { return <section className="action-panel"><div className="panel-title">{icon}{title}</div>{children}</section>; }
 type FormProps={dao:Address;onBusy:(v:string)=>void;onNotice:(n:Notice)=>void};
 const zeroHash="0x0000000000000000000000000000000000000000000000000000000000000000";
+void SelectGrantDao;
+void GrantForm;
 void applicationStatusNames;
 export default App;
