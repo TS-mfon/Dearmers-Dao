@@ -14,7 +14,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const privateKey = process.env.GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY || process.env.GENLAYER_PRIVATE_KEY;
     const endpoint = process.env.GENLAYER_RPC_URL;
     if (!privateKey || !endpoint) return json(res, 503, { error: "GenLayer platform signer is not configured." });
-    const client = createClient({ chain: chains.testnetBradbury, account: createAccount(privateKey as `0x${string}`), endpoint });
+    const network = process.env.GENLAYER_NETWORK || "studionet";
+    const chain = network === "testnet-bradbury" ? chains.testnetBradbury : network === "testnet-asimov" ? chains.testnetAsimov : chains.studionet;
+    const client = createClient({ chain, account: createAccount(privateKey as `0x${string}`), endpoint });
     const hash = await client.writeContract({ address, functionName: action, function: action, args } as never);
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const receipt = await client.getTransaction({ hash } as never) as unknown as Record<string, unknown>;

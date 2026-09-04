@@ -17,7 +17,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const baseRpc = process.env.BASE_RPC_URL;
     const genlayerRpc = process.env.GENLAYER_RPC_URL;
     if (!privateKey || !baseRpc || !genlayerRpc) throw new Error("Review relay environment is incomplete");
-    const genlayer = createClient({ chain: chains.testnetBradbury, endpoint: genlayerRpc });
+    const network = process.env.GENLAYER_NETWORK || "studionet";
+    const chain = network === "testnet-bradbury" ? chains.testnetBradbury : network === "testnet-asimov" ? chains.testnetAsimov : chains.studionet;
+    const genlayer = createClient({ chain, endpoint: genlayerRpc });
     const receipt = await genlayer.getTransaction({ hash: genlayerTxHash as never });
     const status = String((receipt as Record<string, unknown>).statusName || (receipt as Record<string, unknown>).status || "").toUpperCase();
     if (status !== "FINALIZED") return json(res, 409, { error: `GenLayer transaction is ${status || "not finalized"}.` });
