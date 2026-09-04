@@ -1,0 +1,27 @@
+name: Dearmers autonomous engine
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run automation:reconcile
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          DEARMERS_REGISTRY_ADDRESS: ${{ secrets.DEARMERS_REGISTRY_ADDRESS }}
+          BASE_AUTOMATION_PRIVATE_KEY: ${{ secrets.BASE_AUTOMATION_PRIVATE_KEY }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: ${{ secrets.MONGODB_DB }}
+          DELEGATION_ENCRYPTION_KEY: ${{ secrets.DELEGATION_ENCRYPTION_KEY }}
+          ONESHOT_RELAYER_URL: ${{ secrets.ONESHOT_RELAYER_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
