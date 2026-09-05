@@ -1,58 +1,93 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { Activity, ArrowUpRight, GitBranch, Save, Search, UserRound } from "lucide-react";
+import { Activity, ArrowLeft, ArrowUpRight, Camera, Check, ExternalLink, GitBranch, Save, UserRound } from "lucide-react";
 import type { Address } from "viem";
-import { useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { walletClient } from "../lib/dao";
 
-type Profile = { wallet?: string; identity?: string; username?: string; displayName?: string; bio?: string; website?: string; github?: string; avatarUrl?: string; reputationScore?: number };
+export type PublicProfile = { wallet?: string; identity?: string; username?: string; displayName?: string; bio?: string; website?: string; github?: string; avatarUrl?: string; reputationScore?: number };
+type Notice = { tone: "info" | "success" | "error"; text: string };
 
-export function ProfilePage({ account, onNotice }: { account: Address | ""; onNotice: (notice: { tone: "info" | "success" | "error"; text: string }) => void }) {
+async function responseBody<T>(response: Response): Promise<T> {
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((body as { error?: string }).error || "The network did not return a usable response.");
+  return body as T;
+}
+
+export function ProfilePage({ account, onNotice }: { account: Address | ""; onNotice: (notice: Notice) => void }) {
   const { user, getAccessToken } = usePrivy();
   const { wallet } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const profileWallet = (wallet || account) as Address | "";
   const profileIdentity = !profileWallet && user ? `privy:${user.id}` : "";
-  const isOwner = Boolean((account && profileWallet && account.toLowerCase() === profileWallet.toLowerCase()) || profileIdentity);
-  const [profile, setProfile] = useState<Profile>({ wallet: profileWallet, identity: profileIdentity });
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Profile[]>([]);
+  const isOwner = Boolean((account && profileWallet && account.toLowerCase() === profileWallet.toLowerCase()) || (!wallet && profileIdentity));
+  const editing = location.pathname === "/profile/edit";
+  const [profile, setProfile] = useState<PublicProfile>({ wallet: profileWallet, identity: profileIdentity });
+  const [draft, setDraft] = useState<PublicProfile>(profile);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
-  useEffect(() => {
-    if (!profileWallet && !profileIdentity) return;
-    const load = async () => {
+  const load = useCallback(async () => {
+    if (!profileWallet && !profileIdentity) { setLoading(false); return; }
+    setLoading(true);
+    try {
       const token = profileIdentity ? await getAccessToken() : null;
-      const endpoint = profileWallet ? `/api/profile?wallet=${profileWallet}` : `/api/profile?identity=${encodeURIComponent(profileIdentity)}`;
-      const response = await fetch(endpoint, token ? { headers: { authorization: `Bearer ${token}` } } : undefined);
-      const body = await response.json() as { profile?: Profile };
-      setProfile(body.profile || { wallet: profileWallet, identity: profileIdentity });
-    };
-    void load().catch(() => undefined);
-    const listener = () => void load().catch(() => undefined);
-    window.addEventListener("dearmers:profile-updated", listener);
-    return () => window.removeEventListener("dearmers:profile-updated", listener);
-  }, [getAccessToken, profileIdentity, profileWallet]);
+      const endpoint = profileWallet ? `/api/profile?wallet=${encodeURIComponent(profileWallet)}` : `/api/profile?identity=${encodeURIComponent(profileIdentity)}`;
+      const body = await responseBody<{ profile?: PublicProfile }>(await fetch(endpoint, token ? { headers: { authorization: `Bearer ${token}` } } : undefined));
+      const next = body.profile || { wallet: profileWallet, identity: profileIdentity };
+      setProfile(next); setDraft(next);
+    } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Profile could not be loaded." }); }
+    finally { setLoading(false); }
+  }, [getAccessToken, onNotice, profileIdentity, profileWallet]);
+
+  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); const listener = () => void load(); window.addEventListener("dearmers:profile-updated", listener); return () => { window.clearTimeout(timer); window.removeEventListener("dearmers:profile-updated", listener); }; }, [load]);
+
+  const uploadPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return onNotice({ tone: "error", text: "Choose a PNG, JPEG, or WebP image." });
+    if (file.size > 2_500_000) return onNotice({ tone: "error", text: "Profile photos must be smaller than 2.5 MB." });
+    try {
+      setUploading(true);
+      const token = await getAccessToken();
+      const reader = new FileReader();
+      const data = await new Promise<string>((resolve, reject) => { reader.onerror = () => reject(new Error("The photo could not be read.")); reader.onload = () => resolve(String(reader.result).split(",")[1] || ""); reader.readAsDataURL(file); });
+      let walletAddress = account || undefined; let signature = "";
+      if (!token && account) { const client = await walletClient(); walletAddress = client.account!.address; signature = await client.signMessage({ account: client.account!, message: `Dearmers-Dao\nAction: upload-profile-photo\nWallet: ${walletAddress.toLowerCase()}\nResource: ${file.name}` }); }
+      const body = await responseBody<{ url: string }>(await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data, wallet: walletAddress, signature }) }));
+      setDraft((current) => ({ ...current, avatarUrl: body.url }));
+      onNotice({ tone: "success", text: "Photo uploaded. Save your profile to publish it." });
+    } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Photo upload failed." }); }
+    finally { setUploading(false); event.target.value = ""; }
+  };
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (!account && !user) return onNotice({ tone: "error", text: "Authenticate before editing your profile." });
+    if (!isOwner) return onNotice({ tone: "error", text: "Only the profile owner can edit this identity." });
     try {
-      setBusy(true);
-      const token = await getAccessToken();
-      const client = account ? await walletClient() : null;
-      const signature = client ? await client.signMessage({ account: client.account!, message: `Dearmers-Dao\nAction: save-profile\nWallet: ${account.toLowerCase()}\nResource: ${profile.github || profile.username || account}` }) : "";
-      const response = await fetch("/api/profile", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ ...profile, wallet: account || undefined, identity: profileIdentity || profile.identity, signature }) });
-      const body = await response.json() as { profile?: Profile; error?: string };
-      if (!response.ok) throw new Error(body.error || "Profile could not be saved.");
-      setProfile(body.profile || profile);
-      window.dispatchEvent(new Event("dearmers:profile-updated"));
-      onNotice({ tone: "success", text: "Profile updated and ready for discovery." });
-    } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Profile could not be saved." }); } finally { setBusy(false); }
+      setBusy(true); const token = await getAccessToken(); const client = account ? await walletClient() : null;
+      const signature = client ? await client.signMessage({ account: client.account!, message: `Dearmers-Dao\nAction: save-profile\nWallet: ${account.toLowerCase()}\nResource: ${draft.github || draft.username || account}` }) : "";
+      const body = await responseBody<{ profile?: PublicProfile }>(await fetch("/api/profile", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ ...draft, wallet: account || undefined, identity: profileIdentity || draft.identity, signature }) }));
+      const next = body.profile || draft; setProfile(next); setDraft(next); window.dispatchEvent(new Event("dearmers:profile-updated")); onNotice({ tone: "success", text: "Profile updated and ready for discovery." }); navigate("/profile");
+    } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Profile could not be saved." }); }
+    finally { setBusy(false); }
   };
 
-  const search = async () => { const response = await fetch(`/api/social?kind=profile&q=${encodeURIComponent(query)}`); const body = await response.json() as { profiles?: Profile[] }; setResults(body.profiles || []); };
-  const displayWallet = profile.wallet || profile.identity || "privy identity";
-  return <div className="profile-page"><div className="profile-heading"><span className="eyebrow"><UserRound size={13}/> NETWORK IDENTITY</span><h2>{isOwner ? <>Make your work<br /><em>legible to the network.</em></> : <>{profile.displayName || profile.username || "Builder dossier"}<br /><em>public conviction record.</em></>}</h2><p>Your profile is portable context for grant committees, DAO councils, and future collaborators.</p></div><div className="profile-layout">{isOwner ? <form className="profile-editor" onSubmit={(event) => void save(event)}><div className="profile-avatar">{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <UserRound size={30} />}</div><Field label="Display name" value={profile.displayName || ""} onChange={(value) => setProfile({ ...profile, displayName: value })} placeholder="How should the assembly address you?" /><Field label="Username" value={profile.username || ""} onChange={(value) => setProfile({ ...profile, username: value })} placeholder="your-handle" /><Field label="Short bio" value={profile.bio || ""} onChange={(value) => setProfile({ ...profile, bio: value })} placeholder="What are you building?" textarea /><Field label="GitHub login" value={profile.github || ""} onChange={(value) => setProfile({ ...profile, github: value })} placeholder="Used for contributor evidence" /><Field label="Website" value={profile.website || ""} onChange={(value) => setProfile({ ...profile, website: value })} placeholder="https://…" /><button className="primary-button" disabled={busy}><Save size={15}/>{busy ? "Saving identity…" : "Save identity"}</button></form> : <section className="profile-public"><div className="profile-avatar">{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <UserRound size={30} />}</div><h3>{profile.displayName || profile.username || `${displayWallet.slice(0, 8)}…${displayWallet.slice(-6)}`}</h3><p>{profile.bio || "This builder has not published a bio yet."}</p><code>{displayWallet}</code></section>}<aside className="profile-aside"><div className="detail-section-title"><Activity size={16}/> Network search</div><div className="profile-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a builder" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void search(); } }} /><button onClick={() => void search()}>Search</button></div><div className="profile-results">{results.map((result) => <a key={result.wallet || result.identity} href={result.wallet ? `/profile/${result.wallet}` : `/profile`}><span>{result.avatarUrl ? <img src={result.avatarUrl} alt="" /> : <UserRound size={15}/>}</span><div><strong>{result.displayName || result.username || "Anonymous builder"}</strong><small>{result.reputationScore || 0}/100 conviction · {result.github ? `@${result.github}` : "wallet-first"}</small></div><ArrowUpRight size={15}/></a>)}</div><div className="profile-score"><span>CONVICTION INDEX</span><strong>{profile.reputationScore || 0}<small>/100</small></strong><p>Public GitHub evidence can be evaluated and carried into grant applications.</p>{profile.github && <a href={`https://github.com/${profile.github}`} target="_blank" rel="noreferrer"><GitBranch size={14}/> View GitHub <ArrowUpRight size={13}/></a>}</div></aside></div></div>;
+  const displayName = profile.displayName || profile.username || "Dreamer profile";
+  const displayWallet = profile.wallet || profile.identity || "Identity not connected";
+  const profileUrl = profile.wallet ? `/profile/${profile.wallet}` : "/profile";
+  const initials = useMemo(() => displayName.slice(0, 2).toUpperCase(), [displayName]);
+
+  if (editing && !isOwner) return <div className="profile-page profile-state"><UserRound size={28}/><h2>Private edit chamber</h2><p>Only the owner can edit this profile.</p><Link className="primary-button" to={profileUrl}>Return to profile</Link></div>;
+  if (loading) return <div className="profile-page profile-state"><div className="profile-skeleton"/><strong>Reading identity signal…</strong><span>Loading the public profile dashboard.</span></div>;
+  if (!profileWallet && !profileIdentity) return <div className="profile-page profile-state"><UserRound size={28}/><h2>Enter before creating a profile</h2><p>Connect a wallet or authenticate with Privy to make your profile discoverable.</p></div>;
+
+  return <div className="profile-page">
+    <div className="profile-heading"><span className="eyebrow"><UserRound size={13}/> NETWORK IDENTITY</span><div className="profile-heading-row"><div><h2>{isOwner ? <>Your presence<br/><em>in the network.</em></> : <>{displayName}<br/><em>public conviction record.</em></>}</h2><p>Portable context for grant committees, DAO councils, and future collaborators.</p></div>{isOwner && !editing && <Link className="primary-button" to="/profile/edit"><Save size={15}/> Edit profile</Link>}</div></div>
+    {editing ? <form className="profile-editor profile-edit-route" onSubmit={(event) => void save(event)}><div className="profile-edit-header"><Link className="back-link" to="/profile"><ArrowLeft size={15}/> Back to profile</Link><span className="eyebrow">PROFILE EDITOR</span><h3>Refine your public signal.</h3><p>These details are visible to people discovering you through the DAO network.</p></div><div className="profile-photo-editor"><div className="profile-avatar profile-avatar-large">{draft.avatarUrl ? <img src={draft.avatarUrl} alt="" /> : <span>{initials}</span>}</div><label className="upload-photo-button"><Camera size={16}/>{uploading ? "Uploading…" : "Change photo"}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadPhoto(event)} disabled={uploading}/></label>{draft.avatarUrl && <button type="button" className="text-button" onClick={() => setDraft({ ...draft, avatarUrl: "" })}>Remove photo</button>}</div><Field label="Display name" value={draft.displayName || ""} onChange={(value) => setDraft({ ...draft, displayName: value })} placeholder="How should the assembly address you?"/><Field label="Username" value={draft.username || ""} onChange={(value) => setDraft({ ...draft, username: value })} placeholder="your-handle"/><Field label="Short bio" value={draft.bio || ""} onChange={(value) => setDraft({ ...draft, bio: value })} placeholder="What are you building?" textarea/><Field label="GitHub login" value={draft.github || ""} onChange={(value) => setDraft({ ...draft, github: value })} placeholder="Used for contributor evidence"/><Field label="Website" value={draft.website || ""} onChange={(value) => setDraft({ ...draft, website: value })} placeholder="https://…"/><div className="profile-form-actions"><Link className="ghost-button" to="/profile">Cancel</Link><button className="primary-button" disabled={busy || uploading}><Save size={15}/>{busy ? "Saving identity…" : "Save profile"}</button></div></form> : <div className="profile-layout"><section className="profile-public profile-dashboard"><div className="profile-cover"/><div className="profile-public-body"><div className="profile-avatar profile-avatar-large">{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <span>{initials}</span>}</div><div className="profile-identity-row"><div><span className="eyebrow">{profile.username ? `@${profile.username}` : "NETWORK MEMBER"}</span><h3>{displayName}</h3></div><span className="profile-score-chip"><Activity size={14}/> {profile.reputationScore || 0}/100</span></div><p className="profile-bio">{profile.bio || "This dreamer has not published a bio yet."}</p><div className="profile-links">{profile.github && <a href={`https://github.com/${profile.github}`} target="_blank" rel="noreferrer"><GitBranch size={15}/> GitHub <ExternalLink size={12}/></a>}{profile.website && <a href={profile.website} target="_blank" rel="noreferrer"><ArrowUpRight size={15}/> Website <ExternalLink size={12}/></a>}</div><div className="profile-wallet-row"><span>Wallet / identity</span><code>{displayWallet}</code><button type="button" className="icon-button" onClick={() => void navigator.clipboard?.writeText(displayWallet)}><Check size={14}/></button></div></div></section><aside className="profile-aside"><div className="detail-section-title"><Activity size={16}/> Network signal</div><div className="profile-score"><span>CONVICTION INDEX</span><strong>{profile.reputationScore || 0}<small>/100</small></strong><p>Public GitHub evidence can be evaluated and carried into grant applications.</p></div><div className="profile-next"><span>KEEP EXPLORING</span><Link to="/explorer">Discover DAOs <ArrowUpRight size={14}/></Link><Link to="/notifications">Read network signals <ArrowUpRight size={14}/></Link></div></aside></div>}
+  </div>;
 }
 
 function Field({ label, value, onChange, placeholder, textarea }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; textarea?: boolean }) { return <label className="profile-field">{label}{textarea ? <textarea value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} rows={4}/> : <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder}/>}</label>; }

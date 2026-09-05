@@ -2,6 +2,9 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GridFSBucket, ObjectId } from "mongodb";
 import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
+import { bearerIdentity } from "./_privy.js";
+import { verifyWallet } from "./_auth.js";
+import type { Address, Hex } from "viem";
 
 const maxBytes = 2_500_000;
 const mimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
@@ -9,8 +12,11 @@ const mimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+x
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method === "POST") {
-      const { fileName, mimeType, data } = req.body || {};
-      if (!fileName || !mimeTypes.has(mimeType) || typeof data !== "string") return json(res, 400, { error: "Use a PNG, JPEG, WebP, or SVG image." });
+      const { fileName, mimeType, data, wallet, signature } = req.body || {};
+      const privy = await bearerIdentity(req.headers.authorization).catch(() => null);
+      const walletAuthorized = wallet && signature ? await verifyWallet("upload-profile-photo", wallet as Address, String(fileName), signature as Hex).catch(() => false) : false;
+      if (!privy && !walletAuthorized) return json(res, 401, { error: "Authenticate before uploading a profile photo." });
+      if (!fileName || !mimeTypes.has(mimeType) || typeof data !== "string") return json(res, 400, { error: "Use a PNG, JPEG, or WebP image." });
       const bytes = Buffer.from(data, "base64");
       if (!bytes.length || bytes.length > maxBytes) return json(res, 413, { error: "Images must be smaller than 2.5 MB." });
       const db = await database();

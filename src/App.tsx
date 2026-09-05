@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLoginWithEmail, usePrivy } from "@privy-io/react-auth";
-import { ArrowRight, Brain, Building2, CircleDollarSign, FileCheck2, Landmark, RefreshCw, ShieldCheck, Sparkles, Users, Wallet, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Brain, Building2, CircleDollarSign, FileCheck2, Landmark, RefreshCw, Search as SearchIcon, ShieldCheck, Sparkles, Users, Wallet, X } from "lucide-react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { Address, Hash } from "viem";
 import { parseUnits } from "viem";
@@ -68,13 +68,14 @@ function App() {
   useEffect(() => { const timer = window.setTimeout(() => void refreshProposals(), 0); return () => window.clearTimeout(timer); }, [refreshProposals]);
 
   const created = async (daoId: Hash) => { await refresh(); const record = (await listDaos()).find((item) => item.daoId === daoId); if (record) setSelected(record); };
-  return <BrowserRouter><OnboardingGate onConnect={connect}><Routes>
+  return <BrowserRouter><OnboardingGate onConnect={connect}><ProductShell><Routes>
     <Route path="/" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/sanctuary" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/explorer" element={<ExplorerPage daos={daos} />} />
     <Route path="/dao/:daoId" element={<DaoDetailPage daos={daos} account={account} onNotice={setNotice} />} />
     <Route path="/profile/:wallet" element={<ProfilePage account={account} onNotice={setNotice} />} />
     <Route path="/profile" element={<ProfilePage account={account} onNotice={setNotice} />} />
+    <Route path="/profile/edit" element={<ProfilePage account={account} onNotice={setNotice} />} />
     <Route path="/notifications" element={<NotificationsPage account={account} onNotice={setNotice} />} />
     <Route path="/__protocol" element={<ProtocolAdminPage account={account} onNotice={setNotice} />} />
     <Route path="/forge" element={<WorkspacePage title="Forge a Covenant" eyebrow="COVENANT INCEPTION" icon={<Landmark />} account={account} daos={daos} selected={selected} setSelected={setSelected} notice={notice} refresh={refresh} connect={connect} busy={busy}>
@@ -91,7 +92,27 @@ function App() {
     </WorkspacePage>} />
     <Route path="/grants" element={<GrantAssemblyPage daos={daos} account={account} onConnect={connect} onBusy={setBusy} onNotice={setNotice} />} />
     <Route path="*" element={<Navigate to="/" replace />} />
-  </Routes></OnboardingGate>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
+  </Routes></ProductShell></OnboardingGate>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
+}
+
+function ProductShell({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const standalone = location.pathname === "/" || location.pathname === "/sanctuary";
+  const embedded = ["/forge", "/governance", "/treasury", "/council"].includes(location.pathname);
+  useEffect(() => {
+    const open = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setSearchOpen(true); } if (event.key === "Escape") setSearchOpen(false); };
+    window.addEventListener("keydown", open); return () => window.removeEventListener("keydown", open);
+  }, []);
+  if (standalone || embedded) return <>{children}</>;
+  return <div className="product-shell"><header className="product-nav-shell"><Link className="brand-lockup" to="/sanctuary"><img className="brand-logo" src="/dreamers-dao-logo.svg" alt="Dreamers DAO"/><span><span className="eyebrow">THE DAO FOR DREAMERS</span><strong>Dreamers<span>-Dao</span></strong></span></Link><nav className="product-nav-links" aria-label="Product navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer">Explore</Link><Link className={location.pathname.startsWith("/grants") ? "active" : ""} to="/grants">Grants</Link><Link className={location.pathname.startsWith("/notifications") ? "active" : ""} to="/notifications">Signals</Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile">Profile</Link></nav><div className="product-nav-actions"><button className="search-trigger" onClick={() => setSearchOpen(true)}><SearchIcon size={15}/><span>Search network</span><kbd>⌘K</kbd></button><Link className="primary-button" to="/forge">Forge</Link></div></header>{children}<nav className="mobile-product-nav" aria-label="Mobile navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer"><SearchIcon size={17}/><span>Explore</span></Link><Link className={location.pathname === "/forge" ? "active" : ""} to="/forge"><Landmark size={17}/><span>Forge</span></Link><Link className={location.pathname === "/notifications" ? "active" : ""} to="/notifications"><Sparkles size={17}/><span>Signals</span></Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile"><Users size={17}/><span>Profile</span></Link></nav>{searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} onNavigate={(path) => { setSearchOpen(false); navigate(path); }}/>}</div>;
+}
+
+function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate: (path: string) => void }) {
+  const [query, setQuery] = useState(""); const [loading, setLoading] = useState(false); const [error, setError] = useState(""); const [results, setResults] = useState<{ daos: Array<{ daoId: string; name: string; description?: string }>; profiles: Array<{ wallet?: string; username?: string; displayName?: string; bio?: string }> }>({ daos: [], profiles: [] });
+  useEffect(() => { const timer = window.setTimeout(() => { if (!query.trim()) { setResults({ daos: [], profiles: [] }); return; } setLoading(true); setError(""); fetch(`/api/search?q=${encodeURIComponent(query.trim())}`).then(async (response) => { const body = await response.json() as typeof results & { error?: string }; if (!response.ok) throw new Error(body.error || "Search is unavailable."); setResults({ daos: body.daos || [], profiles: body.profiles || [] }); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Search is unavailable.")).finally(() => setLoading(false)); }, 220); return () => window.clearTimeout(timer); }, [query]);
+  return <div className="search-overlay" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="global-search" role="dialog" aria-modal="true" aria-label="Search network"><div className="global-search-head"><div><span className="eyebrow"><SearchIcon size={13}/> NETWORK SEARCH</span><h2>Find your next<br/><em>covenant or collaborator.</em></h2></div><button className="icon-button" onClick={onClose} aria-label="Close search"><X size={18}/></button></div><label className="global-search-input"><SearchIcon size={18}/><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search DAOs, people, missions…"/><kbd>ESC</kbd></label>{loading && <div className="search-status">Reading the network signal…</div>}{error && <div className="search-error">{error}<button className="text-button" onClick={() => setQuery((value) => `${value} `)}>Retry</button></div>}{!loading && !error && query && !results.daos.length && !results.profiles.length && <div className="search-empty"><Sparkles size={22}/><strong>No matching signal yet.</strong><span>Try a DAO name, builder handle, or mission keyword.</span></div>}<div className="search-results">{results.daos.length > 0 && <div><span className="search-group-label">COVENANTS</span>{results.daos.map((dao) => <button key={dao.daoId} onClick={() => onNavigate(`/dao/${dao.daoId}`)}><span className="search-result-mark"><Landmark size={15}/></span><span><strong>{dao.name}</strong><small>{dao.description || "Constitution-led organisation"}</small></span><ArrowUpRight size={15}/></button>)}</div>}{results.profiles.length > 0 && <div><span className="search-group-label">PEOPLE</span>{results.profiles.map((profile) => <button key={profile.wallet || profile.username} onClick={() => onNavigate(profile.wallet ? `/profile/${profile.wallet}` : "/profile")}><span className="search-result-mark"><Users size={15}/></span><span><strong>{profile.displayName || profile.username || "Anonymous dreamer"}</strong><small>{profile.bio || "Network contributor"}</small></span><ArrowUpRight size={15}/></button>)}</div>}</div></section></div>;
 }
 
 function OnboardingGate({ onConnect, children }: { onConnect: () => Promise<Address | undefined>; children: React.ReactNode }) {

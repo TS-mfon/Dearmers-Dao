@@ -18,11 +18,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const { wallet, signature, email, github, username, displayName, bio, website, avatarUrl, identity } = req.body || {};
     const privy = await bearerIdentity(req.headers.authorization).catch(() => null);
-    const walletAuthorized = wallet && signature && await verifyWallet("save-profile", wallet as Address, String(github || username || wallet), signature as Hex);
+    const walletAuthorized = wallet && signature ? await verifyWallet("save-profile", wallet as Address, String(github || username || wallet), signature as Hex).catch(() => false) : false;
     if (!walletAuthorized && !privy) return json(res, 401, { error: "Valid wallet signature or Privy session required." });
     const normalizedWallet = wallet ? String(wallet).toLowerCase() : "";
     const profileIdentity = String(identity || (privy ? `privy:${privy.sub}` : ""));
-    const update: Record<string, unknown> = { ...(normalizedWallet ? { wallet: normalizedWallet } : {}), ...(profileIdentity ? { identity: profileIdentity } : {}), ...(email ? { email: String(email).slice(0, 180) } : {}), ...(github ? { github: String(github).replace(/^@/, "").slice(0, 80) } : {}), ...(username ? { username: String(username).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) } : {}), ...(displayName ? { displayName: String(displayName).slice(0, 80) } : {}), ...(bio ? { bio: String(bio).slice(0, 500) } : {}), ...(website ? { website: String(website).slice(0, 240) } : {}), ...(avatarUrl ? { avatarUrl: String(avatarUrl).slice(0, 500) } : {}), updatedAt: new Date() };
+    const update: Record<string, unknown> = { ...(normalizedWallet ? { wallet: normalizedWallet } : {}), ...(profileIdentity ? { identity: profileIdentity } : {}), ...(email ? { email: String(email).slice(0, 180) } : {}), github: String(github || "").replace(/^@/, "").slice(0, 80), username: String(username || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32), displayName: String(displayName || "").slice(0, 80), bio: String(bio || "").slice(0, 500), website: String(website || "").slice(0, 240), avatarUrl: String(avatarUrl || "").slice(0, 500), updatedAt: new Date() };
     if (github) {
       const response = await fetch(`https://api.github.com/users/${encodeURIComponent(String(github).replace(/^@/, ""))}`, { headers: { accept: "application/vnd.github+json", "user-agent": "Dearmers-Dao" } });
       if (response.ok) { const profile = await response.json() as Record<string, unknown>; update.githubProfile = profile; update.reputationScore = Math.min(100, Number(profile.public_repos || 0) * 3 + Number(profile.followers || 0) + (profile.bio ? 10 : 0) + (profile.blog ? 10 : 0)); }
