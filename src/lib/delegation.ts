@@ -6,7 +6,7 @@ export const USDC_BASE_SEPOLIA = (import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x
 export const executorAddress = (import.meta.env.VITE_DEARMERS_EXECUTOR_ADDRESS || "") as Address;
 export const publicClient = createPublicClient({ chain: baseSepolia, transport: http(import.meta.env.VITE_BASE_RPC_URL || "https://sepolia.base.org") });
 
-type Eip1193Provider = {
+export type Eip1193Provider = {
   isMetaMask?: boolean;
   isRabby?: boolean;
   providers?: Eip1193Provider[];

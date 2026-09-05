@@ -54,9 +54,7 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
       const token = await getAccessToken();
       const reader = new FileReader();
       const data = await new Promise<string>((resolve, reject) => { reader.onerror = () => reject(new Error("The photo could not be read.")); reader.onload = () => resolve(String(reader.result).split(",")[1] || ""); reader.readAsDataURL(file); });
-      let walletAddress = account || undefined; let signature = "";
-      if (!token && account) { const client = await walletClient(); walletAddress = client.account!.address; signature = await client.signMessage({ account: client.account!, message: `Dearmers-Dao\nAction: upload-profile-photo\nWallet: ${walletAddress.toLowerCase()}\nResource: ${file.name}` }); }
-      const body = await responseBody<{ url: string }>(await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data, wallet: walletAddress, signature }) }));
+      const body = await responseBody<{ url: string }>(await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data }) }));
       setDraft((current) => ({ ...current, avatarUrl: body.url }));
       onNotice({ tone: "success", text: "Photo uploaded. Save your profile to publish it." });
     } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Photo upload failed." }); }
