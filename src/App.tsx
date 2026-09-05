@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowRight, Brain, Building2, CircleDollarSign, FileCheck2, Landmark, RefreshCw, ShieldCheck, Users, Wallet } from "lucide-react";
-import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { ArrowRight, Brain, Building2, CircleDollarSign, FileCheck2, Landmark, RefreshCw, ShieldCheck, Sparkles, Users, Wallet, X } from "lucide-react";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import type { Address, Hash } from "viem";
 import { parseUnits } from "viem";
 import { explainContractError, listDaos, readDao, REGISTRY_ADDRESS, USDC_ADDRESS, walletClient, writeDao, type DaoRecord } from "./lib/dao";
@@ -66,7 +66,7 @@ function App() {
   useEffect(() => { const timer = window.setTimeout(() => void refreshProposals(), 0); return () => window.clearTimeout(timer); }, [refreshProposals]);
 
   const created = async (daoId: Hash) => { await refresh(); const record = (await listDaos()).find((item) => item.daoId === daoId); if (record) setSelected(record); };
-  return <BrowserRouter><Routes>
+  return <BrowserRouter><OnboardingGate onConnect={connect}><Routes>
     <Route path="/" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/sanctuary" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/explorer" element={<ExplorerPage daos={daos} />} />
@@ -89,7 +89,17 @@ function App() {
     </WorkspacePage>} />
     <Route path="/grants" element={<GrantAssemblyPage daos={daos} account={account} onConnect={connect} onBusy={setBusy} onNotice={setNotice} />} />
     <Route path="*" element={<Navigate to="/" replace />} />
-  </Routes>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
+  </Routes></OnboardingGate>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
+}
+
+function OnboardingGate({ onConnect, children }: { onConnect: () => Promise<void>; children: React.ReactNode }) {
+  const location = useLocation();
+  const [email, setEmail] = useState("");
+  const [dismissed, setDismissed] = useState(() => window.localStorage.getItem("dearmers_profile_prompt_seen") === "1");
+  const isLanding = location.pathname === "/" || location.pathname === "/sanctuary";
+  const open = !isLanding && !dismissed;
+  const close = () => { window.localStorage.setItem("dearmers_profile_prompt_seen", "1"); setDismissed(true); };
+  return <>{children}{open && <div className="profile-onboarding-backdrop" role="presentation"><section className="profile-onboarding" role="dialog" aria-modal="true" aria-labelledby="profile-onboarding-title"><button className="profile-onboarding-close" onClick={close} aria-label="Close profile setup"><X size={18}/></button><div className="onboarding-sigil"><Sparkles size={18}/></div><span className="eyebrow">FIRST ENTRY / IDENTITY RITUAL</span><h2 id="profile-onboarding-title">Make your presence<br/><em>legible to the network.</em></h2><p>Set up a lightweight profile so DAOs can recognise your work, evidence, and contribution history. You can browse without it and finish later.</p><div className="onboarding-options"><button className="onboarding-wallet" onClick={async () => { await onConnect(); close(); }}><Wallet size={18}/><span><strong>Continue with wallet</strong><small>Best for voting, forging, and treasury actions</small></span><ArrowRight size={16}/></button><label className="onboarding-email"><span>Email signal</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com"/><button type="button" onClick={() => { if (email) window.localStorage.setItem("dearmers_profile_email", email); close(); }}>Save and browse</button></label></div><small className="onboarding-note">Your wallet remains the source of truth for onchain actions. No custody. No hidden permissions.</small></section></div>}</>;
 }
 
 type WorkspaceProps = { title: string; eyebrow: string; icon: React.ReactNode; account: Address | ""; daos: DaoRecord[]; selected: DaoRecord | null; setSelected: (dao: DaoRecord) => void; notice: Notice; refresh: () => Promise<void>; connect: () => Promise<void>; busy: string; children: React.ReactNode };
