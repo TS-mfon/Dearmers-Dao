@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Dreamers DAO">
+  <defs>
+    <linearGradient id="dream" x1="12" y1="12" x2="84" y2="84" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B7FF3C"/>
+      <stop offset=".52" stop-color="#9CC7FF"/>
+      <stop offset="1" stop-color="#F3A65A"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="90" height="90" rx="27" fill="#090A0D" stroke="url(#dream)" stroke-width="3"/>
+  <path d="M27 25h16c15 0 25 9 25 23s-10 23-25 23H27V25Zm14 12v22h2c7 0 12-4 12-11s-5-11-12-11h-2Z" fill="url(#dream)"/>
+  <path d="M24 73c10-10 19-15 29-15 8 0 14 3 20 9" fill="none" stroke="#EEE9DF" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="72" cy="24" r="4" fill="#EEE9DF"/>
+</svg>
