@@ -15,6 +15,43 @@ export const BASE_RPC_URL = import.meta.env.VITE_BASE_RPC_URL || "https://sepoli
 export const USDC_ADDRESS = normalizeConfiguredAddress(import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "VITE_USDC_TOKEN_ADDRESS");
 export const publicClient = createPublicClient({ chain: baseSepolia, transport: http(BASE_RPC_URL) });
 
+type InjectedProvider = {
+  isMetaMask?: boolean;
+  isRabby?: boolean;
+  providers?: InjectedProvider[];
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+};
+
+function injectedProvider(): InjectedProvider {
+  const injected = (window as unknown as { ethereum?: InjectedProvider }).ethereum;
+  if (!injected) throw new Error("Install MetaMask to connect a wallet.");
+  const providers = injected.providers?.length ? injected.providers : [injected];
+  return providers.find((provider) => provider.isMetaMask && !provider.isRabby) || providers[0];
+}
+
+export async function ensureBaseSepolia(provider: InjectedProvider = injectedProvider()) {
+  const targetChainId = `0x${baseSepolia.id.toString(16)}`;
+  const currentChainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+  if (currentChainId === targetChainId) return;
+  try {
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetChainId }] });
+  } catch (error) {
+    const code = String((error as { code?: number | string }).code || "");
+    if (code !== "4902") throw new Error("Switch your wallet to Base Sepolia to continue.", { cause: error });
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId: targetChainId,
+        chainName: "Base Sepolia",
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: [BASE_RPC_URL],
+        blockExplorerUrls: ["https://sepolia.basescan.org"],
+      }],
+    });
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetChainId }] });
+  }
+}
+
 export type DaoMode = "operating" | "grant";
 export type MembershipMode = "public" | "whitelist" | "token";
 
@@ -71,9 +108,9 @@ export function parseDaoMetadata(value: string): Partial<DaoMetadata> {
 }
 
 export async function walletClient() {
-  if (!(window as unknown as { ethereum?: unknown }).ethereum) throw new Error("MetaMask is not installed.");
-  const provider = (window as unknown as { ethereum: { request(args: { method: string }): Promise<string[]> } }).ethereum;
-  const accounts = await provider.request({ method: "eth_requestAccounts" });
+  const provider = injectedProvider();
+  await ensureBaseSepolia(provider);
+  const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
   if (!accounts[0]) throw new Error("Connect a wallet before continuing.");
   return createWalletClient({ chain: baseSepolia, account: accounts[0] as Address, transport: custom(provider as never) });
 }

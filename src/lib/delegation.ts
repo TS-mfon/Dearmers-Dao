@@ -1,7 +1,7 @@
 import { erc7715ProviderActions } from "@metamask/smart-accounts-kit/actions";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 import { baseSepolia } from "viem/chains";
-import { normalizeConfiguredAddress } from "./dao";
+import { ensureBaseSepolia, normalizeConfiguredAddress } from "./dao";
 
 export const USDC_BASE_SEPOLIA = normalizeConfiguredAddress(import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "VITE_USDC_TOKEN_ADDRESS");
 export const executorAddress = import.meta.env.VITE_DEARMERS_EXECUTOR_ADDRESS ? normalizeConfiguredAddress(import.meta.env.VITE_DEARMERS_EXECUTOR_ADDRESS, "VITE_DEARMERS_EXECUTOR_ADDRESS") : "" as Address;
@@ -46,6 +46,7 @@ export async function requestDelegationPermissions(treasuryAddress: Address, lim
   const ethereum = selectMetaMask();
   if (!delegateAddress) throw new Error("VITE_DEARMERS_EXECUTOR_ADDRESS is not configured.");
   if (limitAmount <= 0n) throw new Error("The weekly delegation limit must be greater than zero.");
+  await ensureBaseSepolia(ethereum);
   await assertDelegationSupport(ethereum);
   const wallet = createWalletClient({ chain: baseSepolia, transport: custom(ethereum as never) }).extend(erc7715ProviderActions());
   const currentTime = Math.floor(Date.now() / 1000);
