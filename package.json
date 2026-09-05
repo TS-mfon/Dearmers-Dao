@@ -13,7 +13,12 @@
   },
   "dependencies": {
     "@metamask/smart-accounts-kit": "^1.6.0",
+    "@privy-io/react-auth": "^3.40.0",
+    "@solana-program/system": "^0.14.1",
+    "@solana-program/token": "^0.16.1",
+    "@solana/kit": "^8.2.0",
     "genlayer-js": "^1.1.8",
+    "jose": "^6.2.11",
     "lucide-react": "^1.18.0",
     "mongodb": "^7.6.0",
     "react": "^19.2.6",

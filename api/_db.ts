@@ -13,6 +13,7 @@ export async function database(): Promise<Db> {
     await Promise.all([
       db.collection("profiles").createIndex({ wallet: 1 }, { unique: true }),
       db.collection("profiles").createIndex({ username: 1 }),
+      db.collection("profiles").createIndex({ identity: 1 }, { unique: true, sparse: true }),
       db.collection("daoIndex").createIndex({ daoId: 1 }, { unique: true }),
       db.collection("daoIndex").createIndex({ name: 1, category: 1 }),
       db.collection("follows").createIndex({ follower: 1, target: 1 }, { unique: true }),

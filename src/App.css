@@ -112,3 +112,7 @@ body::before { content:""; position:fixed; inset:0; pointer-events:none; z-index
 @keyframes modal-in { from { opacity:0; } to { opacity:1; } }
 @media(max-width:700px){ .onboarding-options { grid-template-columns:1fr; } .profile-onboarding { padding:28px 22px 24px; } .profile-onboarding h2 { font-size:42px; } }
 @media(prefers-reduced-motion:reduce){ .landing-copy,.landing-ticker,.featured-stage,.profile-onboarding-backdrop { animation:none; } .featured-dao:hover,.dao-explorer-card:hover { transform:none; } }
+.onboarding-profile-form { display:grid; gap:14px; margin-top:28px; }
+.onboarding-profile-form label { display:grid; gap:8px; color:var(--muted); font:10px 'DM Mono',monospace; letter-spacing:.1em; text-transform:uppercase; }
+.onboarding-profile-form input,.onboarding-profile-form textarea { width:100%; padding:12px; border:1px solid var(--line); color:var(--paper); background:#08080a; outline:none; font:13px 'Manrope',sans-serif; letter-spacing:normal; text-transform:none; }
+.onboarding-profile-form input:focus,.onboarding-profile-form textarea:focus { border-color:var(--acid); box-shadow:0 0 0 3px rgba(183,255,60,.1); }
