@@ -1,9 +1,10 @@
 import { erc7715ProviderActions } from "@metamask/smart-accounts-kit/actions";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 import { baseSepolia } from "viem/chains";
+import { normalizeConfiguredAddress } from "./dao";
 
-export const USDC_BASE_SEPOLIA = (import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address;
-export const executorAddress = (import.meta.env.VITE_DEARMERS_EXECUTOR_ADDRESS || "") as Address;
+export const USDC_BASE_SEPOLIA = normalizeConfiguredAddress(import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "VITE_USDC_TOKEN_ADDRESS");
+export const executorAddress = import.meta.env.VITE_DEARMERS_EXECUTOR_ADDRESS ? normalizeConfiguredAddress(import.meta.env.VITE_DEARMERS_EXECUTOR_ADDRESS, "VITE_DEARMERS_EXECUTOR_ADDRESS") : "" as Address;
 export const publicClient = createPublicClient({ chain: baseSepolia, transport: http(import.meta.env.VITE_BASE_RPC_URL || "https://sepolia.base.org") });
 
 export type Eip1193Provider = {

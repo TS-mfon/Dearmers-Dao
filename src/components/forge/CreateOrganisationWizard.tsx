@@ -18,6 +18,7 @@ type Props = { account: Address | ""; onBusy: (value: string) => void; onNotice:
 type Draft = { mode: DaoMode | ""; name: string; description: string; mission: string; rules: string; constitution: string; category: string; tags: string; access: AccessMode; weeklyLimit: string; gateChain: "base" | "ethereum"; gateToken: string; logoUri: string; bannerUri: string };
 const initialDraft: Draft = { mode: "", name: "", description: "", mission: "", rules: "", constitution: "", category: "", tags: "", access: "public", weeklyLimit: "1000", gateChain: "base", gateToken: "", logoUri: "", bannerUri: "" };
 
+
 async function uploadImage(file: File) {
   if (file.size > 2_500_000) throw new Error("Images must be smaller than 2.5 MB.");
   const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1] || ""); reader.onerror = () => reject(new Error("Could not read image.")); reader.readAsDataURL(file); });

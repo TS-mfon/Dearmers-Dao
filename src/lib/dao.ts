@@ -1,12 +1,18 @@
-import { createPublicClient, createWalletClient, custom, http, keccak256, stringToHex, type Address, type Hash } from "viem";
+import { createPublicClient, createWalletClient, custom, getAddress, http, isAddress, keccak256, stringToHex, type Address, type Hash } from "viem";
 import { baseSepolia } from "viem/chains";
 import registryAbi from "../abi/DearmersRegistry.json";
 import daoAbi from "../abi/DearmersDAO.json";
 
+export function normalizeConfiguredAddress(value: unknown, name: string): Address {
+  const raw = String(value || "").trim();
+  if (!raw || !isAddress(raw, { strict: false })) throw new Error(`${name} is not a valid EVM address. Check for trailing spaces or an incorrect value.`);
+  return getAddress(raw.toLowerCase());
+}
+
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
-export const REGISTRY_ADDRESS = (import.meta.env.VITE_DEARMERS_REGISTRY || "") as Address;
+export const REGISTRY_ADDRESS = import.meta.env.VITE_DEARMERS_REGISTRY ? normalizeConfiguredAddress(import.meta.env.VITE_DEARMERS_REGISTRY, "VITE_DEARMERS_REGISTRY") : "" as Address;
 export const BASE_RPC_URL = import.meta.env.VITE_BASE_RPC_URL || "https://sepolia.base.org";
-export const USDC_ADDRESS = (import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address;
+export const USDC_ADDRESS = normalizeConfiguredAddress(import.meta.env.VITE_USDC_TOKEN_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "VITE_USDC_TOKEN_ADDRESS");
 export const publicClient = createPublicClient({ chain: baseSepolia, transport: http(BASE_RPC_URL) });
 
 export type DaoMode = "operating" | "grant";
@@ -86,12 +92,14 @@ export async function createDao(input: { name: string; mode: DaoMode; treasury: 
   requireRegistry();
   const client = await walletClient();
   const admin = client.account!.address;
+  const reviewOracle = normalizeConfiguredAddress(input.reviewOracle, "Review oracle address");
+  const executor = normalizeConfiguredAddress(input.executor, "Automation executor address");
   const daoId = createDaoId(input.name, admin);
   const hash = await client.writeContract({
     address: REGISTRY_ADDRESS,
     abi: registryAbi,
     functionName: "createDAO",
-    args: [daoId, input.treasury, input.mode === "grant" ? 1 : 0, input.reviewOracle, input.executor, input.name.trim(), input.metadataUri.trim()],
+    args: [daoId, input.treasury, input.mode === "grant" ? 1 : 0, reviewOracle, executor, input.name.trim(), input.metadataUri.trim()],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("DAO creation reverted on Base Sepolia.");
