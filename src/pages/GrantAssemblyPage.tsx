@@ -5,7 +5,7 @@ import { isAddress, parseUnits } from "viem";
 import { explainContractError, type DaoRecord, writeDao } from "../lib/dao";
 
 type Notice = { tone: "info" | "success" | "error"; text: string };
-export function GrantAssemblyPage({ daos, account, onConnect, onBusy, onNotice }: { daos: DaoRecord[]; account: Address | ""; onConnect: () => Promise<void>; onBusy: (value: string) => void; onNotice: (notice: Notice) => void }) {
+export function GrantAssemblyPage({ daos, account, onConnect, onBusy, onNotice }: { daos: DaoRecord[]; account: Address | ""; onConnect: () => Promise<Address | undefined>; onBusy: (value: string) => void; onNotice: (notice: Notice) => void }) {
   const grants = useMemo(() => daos.filter((dao) => dao.mode === 1), [daos]); const [selectedId, setSelectedId] = useState(grants[0]?.daoId || ""); const selected = grants.find((dao) => dao.daoId === selectedId) || grants[0]; const [tab, setTab] = useState<"round" | "apply">("round");
   const [round, setRound] = useState({ title: "", budget: "500", description: "", deadline: "7" }); const [application, setApplication] = useState({ roundId: "0", project: "", recipient: "", amount: "100", evidence: "", github: "" });
   const run = async (label: string, action: () => Promise<unknown>) => { try { onBusy(label); await action(); onNotice({ tone: "success", text: `${label} completed.` }); } catch (error) { onNotice({ tone: "error", text: explainContractError(error) }); } finally { onBusy(""); } };
