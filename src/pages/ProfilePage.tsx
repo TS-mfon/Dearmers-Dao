@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { Activity, ArrowLeft, ArrowUpRight, Camera, Check, ExternalLink, GitBranch, Save, UserRound } from "lucide-react";
+import { Activity, ArrowLeft, ArrowUpRight, Camera, Check, ExternalLink, GitBranch, Heart, Save, UserRound } from "lucide-react";
 import type { Address } from "viem";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { walletClient } from "../lib/dao";
@@ -28,6 +28,9 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [following, setFollowing] = useState(false);
+  const [followerCount, setFollowerCount] = useState(0);
+  const [socialBusy, setSocialBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!profileWallet && !profileIdentity) { setLoading(false); return; }
@@ -43,6 +46,35 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
   }, [getAccessToken, onNotice, profileIdentity, profileWallet]);
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); const listener = () => void load(); window.addEventListener("dearmers:profile-updated", listener); return () => { window.clearTimeout(timer); window.removeEventListener("dearmers:profile-updated", listener); }; }, [load]);
+
+  const publicTarget = (profile.wallet || profile.identity || "").toLowerCase();
+  useEffect(() => {
+    if (!publicTarget || isOwner) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = await getAccessToken();
+        const response = await fetch(`/api/social?kind=profile-follow&target=${encodeURIComponent(publicTarget)}`, token ? { headers: { authorization: `Bearer ${token}` } } : undefined);
+        const body = await responseBody<{ following?: boolean; count?: number }>(response);
+        if (!cancelled) { setFollowing(Boolean(body.following)); setFollowerCount(Number(body.count || 0)); }
+      } catch { if (!cancelled) setFollowerCount(0); }
+    })();
+    return () => { cancelled = true; };
+  }, [getAccessToken, isOwner, publicTarget]);
+
+  const toggleFollow = async () => {
+    if (isOwner || !publicTarget) return;
+    try {
+      setSocialBusy(true);
+      const token = await getAccessToken();
+      if (!token) throw new Error("Sign in with Privy to follow people.");
+      const action = following ? "unfollow" : "follow";
+      const body = await responseBody<{ count?: number }>(await fetch("/api/social", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ action, target: publicTarget, targetType: "profile" }) }));
+      setFollowing(action === "follow"); setFollowerCount(Number(body.count || 0));
+      onNotice({ tone: "success", text: action === "follow" ? `You are now following ${displayName}.` : "You unfollowed this profile." });
+    } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Could not update follow preference." }); }
+    finally { setSocialBusy(false); }
+  };
 
   const uploadPhoto = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -74,8 +106,8 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
   };
 
   const displayName = profile.displayName || profile.username || "Dreamer profile";
-  const displayWallet = profile.wallet || profile.identity || "Identity not connected";
-  const profileUrl = profile.wallet ? `/profile/${profile.wallet}` : "/profile";
+  const displayWallet = profile.wallet ? `${profile.wallet.slice(0, 8)}…${profile.wallet.slice(-6)}` : profile.identity ? "Privy member" : "Identity not connected";
+  const profileUrl = profile.wallet ? `/profile/${profile.wallet}` : profile.identity ? `/profile/identity/${encodeURIComponent(profile.identity)}` : "/profile";
   const initials = useMemo(() => displayName.slice(0, 2).toUpperCase(), [displayName]);
 
   if (editing && !isOwner) return <div className="profile-page profile-state"><UserRound size={28}/><h2>Private edit chamber</h2><p>Only the owner can edit this profile.</p><Link className="primary-button" to={profileUrl}>Return to profile</Link></div>;
@@ -83,8 +115,8 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
   if (!profileWallet && !profileIdentity) return <div className="profile-page profile-state"><UserRound size={28}/><h2>Enter before creating a profile</h2><p>Connect a wallet or authenticate with Privy to make your profile discoverable.</p></div>;
 
   return <div className="profile-page">
-    <div className="profile-heading"><span className="eyebrow"><UserRound size={13}/> NETWORK IDENTITY</span><div className="profile-heading-row"><div><h2>{isOwner ? <>Your presence<br/><em>in the network.</em></> : <>{displayName}<br/><em>public conviction record.</em></>}</h2><p>Portable context for grant committees, DAO councils, and future collaborators.</p></div>{isOwner && !editing && <Link className="primary-button" to="/profile/edit"><Save size={15}/> Edit profile</Link>}</div></div>
-    {editing ? <form className="profile-editor profile-edit-route" onSubmit={(event) => void save(event)}><div className="profile-edit-header"><Link className="back-link" to="/profile"><ArrowLeft size={15}/> Back to profile</Link><span className="eyebrow">PROFILE EDITOR</span><h3>Refine your public signal.</h3><p>These details are visible to people discovering you through the DAO network.</p></div><div className="profile-photo-editor"><div className="profile-avatar profile-avatar-large">{draft.avatarUrl ? <img src={draft.avatarUrl} alt="" /> : <span>{initials}</span>}</div><label className="upload-photo-button"><Camera size={16}/>{uploading ? "Uploading…" : "Change photo"}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadPhoto(event)} disabled={uploading}/></label>{draft.avatarUrl && <button type="button" className="text-button" onClick={() => setDraft({ ...draft, avatarUrl: "" })}>Remove photo</button>}</div><Field label="Display name" value={draft.displayName || ""} onChange={(value) => setDraft({ ...draft, displayName: value })} placeholder="How should the assembly address you?"/><Field label="Username" value={draft.username || ""} onChange={(value) => setDraft({ ...draft, username: value })} placeholder="your-handle"/><Field label="Short bio" value={draft.bio || ""} onChange={(value) => setDraft({ ...draft, bio: value })} placeholder="What are you building?" textarea/><Field label="GitHub login" value={draft.github || ""} onChange={(value) => setDraft({ ...draft, github: value })} placeholder="Used for contributor evidence"/><Field label="Website" value={draft.website || ""} onChange={(value) => setDraft({ ...draft, website: value })} placeholder="https://…"/><div className="profile-form-actions"><Link className="ghost-button" to="/profile">Cancel</Link><button className="primary-button" disabled={busy || uploading}><Save size={15}/>{busy ? "Saving identity…" : "Save profile"}</button></div></form> : <div className="profile-layout"><section className="profile-public profile-dashboard"><div className="profile-cover"/><div className="profile-public-body"><div className="profile-avatar profile-avatar-large">{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <span>{initials}</span>}</div><div className="profile-identity-row"><div><span className="eyebrow">{profile.username ? `@${profile.username}` : "NETWORK MEMBER"}</span><h3>{displayName}</h3></div><span className="profile-score-chip"><Activity size={14}/> {profile.reputationScore || 0}/100</span></div><p className="profile-bio">{profile.bio || "This dreamer has not published a bio yet."}</p><div className="profile-links">{profile.github && <a href={`https://github.com/${profile.github}`} target="_blank" rel="noreferrer"><GitBranch size={15}/> GitHub <ExternalLink size={12}/></a>}{profile.website && <a href={profile.website} target="_blank" rel="noreferrer"><ArrowUpRight size={15}/> Website <ExternalLink size={12}/></a>}</div><div className="profile-wallet-row"><span>Wallet / identity</span><code>{displayWallet}</code><button type="button" className="icon-button" onClick={() => void navigator.clipboard?.writeText(displayWallet)}><Check size={14}/></button></div></div></section><aside className="profile-aside"><div className="detail-section-title"><Activity size={16}/> Network signal</div><div className="profile-score"><span>CONVICTION INDEX</span><strong>{profile.reputationScore || 0}<small>/100</small></strong><p>Public GitHub evidence can be evaluated and carried into grant applications.</p></div><div className="profile-next"><span>KEEP EXPLORING</span><Link to="/explorer">Discover DAOs <ArrowUpRight size={14}/></Link><Link to="/notifications">Read network signals <ArrowUpRight size={14}/></Link></div></aside></div>}
+    <div className="profile-heading"><span className="eyebrow"><UserRound size={13}/> NETWORK IDENTITY</span><div className="profile-heading-row"><div><h2>{isOwner ? <>Your presence<br/><em>in the network.</em></> : <>{displayName}<br/><em>public conviction record.</em></>}</h2><p>Portable context for grant committees, DAO councils, and future collaborators.</p></div>{isOwner && !editing && <Link className="primary-button" to="/profile/edit"><Save size={15}/> Edit profile</Link>}{!isOwner && !editing && <button className="primary-button" onClick={() => void toggleFollow()} disabled={socialBusy}><Heart size={15} fill={following ? "currentColor" : "none"}/>{socialBusy ? "Updating…" : following ? "Following" : "Follow"}</button>}</div></div>
+    {editing ? <form className="profile-editor profile-edit-route" onSubmit={(event) => void save(event)}><div className="profile-edit-header"><Link className="back-link" to="/profile"><ArrowLeft size={15}/> Back to profile</Link><span className="eyebrow">PROFILE EDITOR</span><h3>Refine your public signal.</h3><p>These details are visible to people discovering you through the DAO network.</p></div><div className="profile-photo-editor"><div className="profile-avatar profile-avatar-large">{draft.avatarUrl ? <img src={draft.avatarUrl} alt="" /> : <span>{initials}</span>}</div><label className="upload-photo-button"><Camera size={16}/>{uploading ? "Uploading…" : "Change photo"}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadPhoto(event)} disabled={uploading}/></label>{draft.avatarUrl && <button type="button" className="text-button" onClick={() => setDraft({ ...draft, avatarUrl: "" })}>Remove photo</button>}</div><Field label="Display name" value={draft.displayName || ""} onChange={(value) => setDraft({ ...draft, displayName: value })} placeholder="How should the assembly address you?"/><Field label="Username" value={draft.username || ""} onChange={(value) => setDraft({ ...draft, username: value })} placeholder="your-handle"/><Field label="Short bio" value={draft.bio || ""} onChange={(value) => setDraft({ ...draft, bio: value })} placeholder="What are you building?" textarea/><Field label="GitHub login" value={draft.github || ""} onChange={(value) => setDraft({ ...draft, github: value })} placeholder="Used for contributor evidence"/><Field label="Website" value={draft.website || ""} onChange={(value) => setDraft({ ...draft, website: value })} placeholder="https://…"/><div className="profile-form-actions"><Link className="ghost-button" to="/profile">Cancel</Link><button className="primary-button" disabled={busy || uploading}><Save size={15}/>{busy ? "Saving identity…" : "Save profile"}</button></div></form> : <div className="profile-layout"><section className="profile-public profile-dashboard"><div className="profile-cover"/><div className="profile-public-body"><div className="profile-avatar profile-avatar-large">{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <span>{initials}</span>}</div><div className="profile-identity-row"><div><span className="eyebrow">{profile.username ? `@${profile.username}` : "NETWORK MEMBER"}</span><h3>{displayName}</h3></div><span className="profile-score-chip"><Activity size={14}/> {profile.reputationScore || 0}/100</span></div><p className="profile-bio">{profile.bio || "This dreamer has not published a bio yet."}</p><div className="profile-links">{profile.github && <a href={`https://github.com/${profile.github}`} target="_blank" rel="noreferrer"><GitBranch size={15}/> GitHub <ExternalLink size={12}/></a>}{profile.website && <a href={profile.website} target="_blank" rel="noreferrer"><ArrowUpRight size={15}/> Website <ExternalLink size={12}/></a>}</div><div className="profile-wallet-row"><span>Followers</span><strong>{followerCount}</strong></div><div className="profile-wallet-row"><span>Wallet / identity</span><code>{displayWallet}</code>{profile.wallet && <button type="button" className="icon-button" onClick={() => void navigator.clipboard?.writeText(profile.wallet || "")}><Check size={14}/></button>}</div></div></section><aside className="profile-aside"><div className="detail-section-title"><Activity size={16}/> Network signal</div><div className="profile-score"><span>CONVICTION INDEX</span><strong>{profile.reputationScore || 0}<small>/100</small></strong><p>Public GitHub evidence can be evaluated and carried into grant applications.</p></div><div className="profile-next"><span>KEEP EXPLORING</span><Link to="/explorer">Discover DAOs <ArrowUpRight size={14}/></Link><Link to="/notifications">Read network signals <ArrowUpRight size={14}/></Link></div></aside></div>}
   </div>;
 }
 

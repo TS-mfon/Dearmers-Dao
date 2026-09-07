@@ -13,6 +13,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const kind = String(req.query.kind || "profile");
       const query = String(req.query.q || "").trim();
+      if (kind === "profile-follow") {
+        const target = String(req.query.target || "").trim().toLowerCase();
+        const identity = await bearerIdentity(req.headers.authorization).catch(() => null);
+        if (!target) return json(res, 400, { error: "A profile target is required." });
+        return json(res, 200, { following: Boolean(identity && await db.collection("follows").findOne({ actor: identity.sub, target })), count: await db.collection("follows").countDocuments({ target }) });
+      }
       if (kind === "profile") {
         const profiles = await db.collection("profiles").find(query ? { $or: [{ username: new RegExp(query, "i") }, { displayName: new RegExp(query, "i") }, { github: new RegExp(query, "i") }] } : {}).sort({ reputationScore: -1 }).limit(30).project({ _id: 0, wallet: 1, username: 1, displayName: 1, bio: 1, avatarUrl: 1, github: 1, reputationScore: 1 }).toArray();
         return json(res, 200, { profiles });
