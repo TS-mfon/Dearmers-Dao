@@ -19,6 +19,24 @@ contract DearmersRegistry {
     error AlreadyExists();
     error Unauthorized();
 
+    address public owner;
+    mapping(address => bool) public creationRelayers;
+
+    constructor() {
+        owner = msg.sender;
+        creationRelayers[msg.sender] = true;
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyCreationRelayer() {
+        if (!creationRelayers[msg.sender]) revert Unauthorized();
+        _;
+    }
+
     uint256 public daoCount;
     mapping(bytes32 => DAORecord) private daos;
     mapping(address => bytes32[]) private adminDaos;
@@ -26,6 +44,13 @@ contract DearmersRegistry {
 
     event DAOCreated(bytes32 indexed daoId, address indexed dao, address indexed admin, DearmersDAO.DaoMode mode, string name);
     event DAOStatusChanged(bytes32 indexed daoId, bool active);
+    event CreationRelayerChanged(address indexed relayer, bool allowed);
+
+    function setCreationRelayer(address relayer, bool allowed) external onlyOwner {
+        if (relayer == address(0)) revert InvalidInput();
+        creationRelayers[relayer] = allowed;
+        emit CreationRelayerChanged(relayer, allowed);
+    }
 
     function createDAO(
         bytes32 daoId,
@@ -36,12 +61,38 @@ contract DearmersRegistry {
         string calldata name,
         string calldata metadataUri
     ) external returns (address daoAddress) {
-        if (daoId == bytes32(0) || treasury == address(0) || reviewOracle == address(0) || executor == address(0) || bytes(name).length == 0) revert InvalidInput();
+        return _createDAO(msg.sender, daoId, treasury, mode, reviewOracle, executor, name, metadataUri);
+    }
+
+    function createDAOFor(
+        address admin,
+        bytes32 daoId,
+        address treasury,
+        DearmersDAO.DaoMode mode,
+        address reviewOracle,
+        address executor,
+        string calldata name,
+        string calldata metadataUri
+    ) external onlyCreationRelayer returns (address daoAddress) {
+        return _createDAO(admin, daoId, treasury, mode, reviewOracle, executor, name, metadataUri);
+    }
+
+    function _createDAO(
+        address admin,
+        bytes32 daoId,
+        address treasury,
+        DearmersDAO.DaoMode mode,
+        address reviewOracle,
+        address executor,
+        string calldata name,
+        string calldata metadataUri
+    ) internal returns (address daoAddress) {
+        if (admin == address(0) || daoId == bytes32(0) || treasury == address(0) || reviewOracle == address(0) || executor == address(0) || bytes(name).length == 0) revert InvalidInput();
         if (daos[daoId].dao != address(0)) revert AlreadyExists();
-        DearmersDAO dao = new DearmersDAO(msg.sender, daoId, mode, treasury, reviewOracle, executor, address(this));
+        DearmersDAO dao = new DearmersDAO(admin, daoId, mode, treasury, reviewOracle, executor, address(this));
         daoAddress = address(dao);
-        daos[daoId] = DAORecord(daoId, msg.sender, daoAddress, treasury, mode, name, metadataUri, true);
-        adminDaos[msg.sender].push(daoId);
+        daos[daoId] = DAORecord(daoId, admin, daoAddress, treasury, mode, name, metadataUri, true);
+        adminDaos[admin].push(daoId);
         daoIds.push(daoId);
         daoCount++;
         emit DAOCreated(daoId, daoAddress, msg.sender, mode, name);

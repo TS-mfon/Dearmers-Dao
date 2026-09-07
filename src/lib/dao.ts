@@ -1,7 +1,9 @@
 import { createPublicClient, createWalletClient, custom, getAddress, http, isAddress, keccak256, stringToHex, type Address, type Hash } from "viem";
 import { baseSepolia } from "viem/chains";
-import registryAbi from "../abi/DearmersRegistry.json";
-import daoAbi from "../abi/DearmersDAO.json";
+import registryArtifact from "../abi/DearmersRegistry.json";
+import daoArtifact from "../abi/DearmersDAO.json";
+const registryAbi = registryArtifact.abi;
+const daoAbi = daoArtifact.abi;
 
 export function normalizeConfiguredAddress(value: unknown, name: string): Address {
   const raw = String(value || "").trim();

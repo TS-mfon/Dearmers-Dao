@@ -7,6 +7,7 @@ const allowed = new Set(["register_dao", "update_dao", "set_active", "set_consti
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["POST"])) return;
   try {
+    if (req.headers["x-internal-api-key"] !== process.env.INTERNAL_API_SECRET) return json(res, 401, { error: "Internal evaluation access required." });
     const { action, address, args } = req.body || {};
     if (typeof action !== "string" || !allowed.has(action) || typeof address !== "string" || !Array.isArray(args)) {
       return json(res, 400, { error: "Invalid platform signer request." });

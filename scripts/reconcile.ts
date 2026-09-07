@@ -1,13 +1,15 @@
 import { createDecipheriv, createHash } from "node:crypto";
 import { MongoClient } from "mongodb";
 import { Resend } from "resend";
-import { createPublicClient, createWalletClient, encodeFunctionData, http, parseAbi, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, encodeFunctionData, http, parseAbi, type Abi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import { getSmartAccountsEnvironment } from "@metamask/smart-accounts-kit";
 import { redelegatePermissionContextAction } from "@metamask/smart-accounts-kit/actions";
-import registryAbi from "../src/abi/DearmersRegistry.json" with { type: "json" };
-import daoAbi from "../src/abi/DearmersDAO.json" with { type: "json" };
+import registryAbiJson from "../src/abi/DearmersRegistry.json" with { type: "json" };
+import daoAbiJson from "../src/abi/DearmersDAO.json" with { type: "json" };
+const registryAbi = registryAbiJson.abi as unknown as Abi;
+const daoAbi = daoAbiJson.abi as unknown as Abi;
 
 const erc20Abi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]);
 const required = ["BASE_RPC_URL", "DEARMERS_REGISTRY_ADDRESS", "BASE_AUTOMATION_PRIVATE_KEY", "MONGODB_URI", "DELEGATION_ENCRYPTION_KEY"];

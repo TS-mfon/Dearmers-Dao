@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, preserve-caught-error */
 import { encodeFunctionData, parseAbi, numberToHex } from "viem";
 import { decodeDelegations } from "@metamask/delegation-core";
 

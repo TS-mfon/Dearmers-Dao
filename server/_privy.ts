@@ -21,3 +21,9 @@ export async function bearerIdentity(value: unknown): Promise<PrivyIdentity | nu
   if (!header.startsWith("Bearer ")) return null;
   return verifyPrivyToken(header.slice(7));
 }
+
+export async function requirePrivyIdentity(value: unknown): Promise<PrivyIdentity> {
+  const identity = await bearerIdentity(value);
+  if (!identity) throw new Error("A valid Privy session is required.");
+  return identity;
+}

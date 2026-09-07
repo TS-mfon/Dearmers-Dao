@@ -3,7 +3,6 @@ import { createPublicClient, createWalletClient, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import * as fs from "fs";
-import * as path from "path";
 
 // Read private key
 const envPath = "C:\\Users\\Tech Shine\\.gemini\\antigravity-ide\\brain\\d60866f6-fc5c-4693-be2a-fba2a1e6c11c\\scratch\\.env.build";
