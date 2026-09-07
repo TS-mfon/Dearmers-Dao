@@ -16,12 +16,12 @@ async function responseBody<T>(response: Response): Promise<T> {
 
 export function ProfilePage({ account, onNotice }: { account: Address | ""; onNotice: (notice: Notice) => void }) {
   const { user, getAccessToken } = usePrivy();
-  const { wallet } = useParams();
+  const { wallet, identity } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const profileWallet = (wallet || account) as Address | "";
-  const profileIdentity = !profileWallet && user ? `privy:${user.id}` : "";
-  const isOwner = Boolean((account && profileWallet && account.toLowerCase() === profileWallet.toLowerCase()) || (!wallet && profileIdentity));
+  const profileWallet = (wallet || (!identity ? account : "")) as Address | "";
+  const profileIdentity = identity || (!profileWallet && user ? `privy:${user.id}` : "");
+  const isOwner = Boolean((account && profileWallet && account.toLowerCase() === profileWallet.toLowerCase()) || (!wallet && !identity && profileIdentity));
   const editing = location.pathname === "/profile/edit";
   const [profile, setProfile] = useState<PublicProfile>({ wallet: profileWallet, identity: profileIdentity });
   const [draft, setDraft] = useState<PublicProfile>(profile);

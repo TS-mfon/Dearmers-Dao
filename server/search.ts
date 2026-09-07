@@ -13,7 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const db = await database();
     const [daos, profiles] = await Promise.all([
       db.collection("daoIndex").find({ banned: { $ne: true }, active: { $ne: false }, $or: [{ name: expression }, { description: expression }, { category: expression }, { mission: expression }, { tags: expression }, { dao: expression }] }).sort({ updatedAt: -1 }).limit(20).project({ _id: 0 }).toArray(),
-      db.collection("profiles").find({ $or: [{ username: expression }, { displayName: expression }, { github: expression }, { bio: expression }] }).sort({ reputationScore: -1 }).limit(20).project({ _id: 0, email: 0, identity: 0 }).toArray(),
+      db.collection("profiles").find({ $or: [{ username: expression }, { displayName: expression }, { github: expression }, { bio: expression }] }).sort({ reputationScore: -1 }).limit(20).project({ _id: 0, email: 0 }).toArray(),
     ]);
     return json(res, 200, { query, daos, profiles });
   } catch (error) { return json(res, 500, { error: safeError(error) }); }
