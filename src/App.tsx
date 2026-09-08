@@ -10,6 +10,7 @@ import { ProfilePage } from "./pages/ProfilePage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { CreateProposalRoute, DaoAnnouncementsRoute, DaoChatRoute, DaoHistoryRoute, DaoMembersRoute, DaoOverviewRoute, DaoProposalsRoute, GrantApplyRoute, GrantDetailRoute, GrantExplorerRoute, ProposalDetailRoute } from "./pages/DaoRoutes";
 import { AdminBulletinRoute, AdminDashboardRoute, AdminMembersRoute, AdminProposalsRoute, AdminSettingsRoute } from "./pages/AdminRoutes";
+import { DaoAdminRoute } from "./pages/DaoAdminRoute";
 import "./App.css";
 
 type Notice = { tone: "info" | "success" | "error"; text: string };
@@ -41,7 +42,7 @@ function App() {
   useEffect(() => { const timer = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(timer); }, [refresh]);
 
   const created = async (daoId: Hash) => { await refresh(); const record = (await listDaos()).find((item) => item.daoId === daoId); if (record) setSelected(record); };
-  return <BrowserRouter><OnboardingGate onConnect={connect}><ProductShell><Routes>
+  return <BrowserRouter><OnboardingGate onConnect={connect}><ProductShell notice={notice}><Routes>
     <Route path="/" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/sanctuary" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/explorer" element={<ExplorerPage daos={daos} />} />
@@ -54,6 +55,7 @@ function App() {
     <Route path="/dao/:daoId/announcements" element={<DaoAnnouncementsRoute daos={daos} account={account} onNotice={setNotice} />} />
     <Route path="/dao/:daoId/history" element={<DaoHistoryRoute daos={daos} account={account} onNotice={setNotice} />} />
     <Route path="/dao/:daoId/members" element={<DaoMembersRoute daos={daos} account={account} onNotice={setNotice} />} />
+    <Route path="/dao/:daoId/control-room/*" element={<DaoAdminRoute onNotice={setNotice} />} />
     <Route path="/profile/:wallet" element={<ProfilePage account={account} onNotice={setNotice} />} />
     <Route path="/profile/identity/:identity" element={<ProfilePage account={account} onNotice={setNotice} />} />
     <Route path="/profile" element={<ProfilePage account={account} onNotice={setNotice} />} />
@@ -79,7 +81,7 @@ function App() {
   </Routes></ProductShell></OnboardingGate>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
 }
 
-function ProductShell({ children }: { children: React.ReactNode }) {
+function ProductShell({ children, notice }: { children: React.ReactNode; notice: Notice }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -90,7 +92,7 @@ function ProductShell({ children }: { children: React.ReactNode }) {
     window.addEventListener("keydown", open); return () => window.removeEventListener("keydown", open);
   }, []);
   if (standalone || embedded) return <>{children}</>;
-  return <div className="product-shell"><header className="product-nav-shell"><Link className="brand-lockup" to="/sanctuary"><img className="brand-logo" src="/dreamers-dao-logo.svg" alt="Dreamers DAO"/><span><span className="eyebrow">THE DAO FOR DREAMERS</span><strong>Dreamers<span>-Dao</span></strong></span></Link><nav className="product-nav-links" aria-label="Product navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer">Explore</Link><Link className={location.pathname.startsWith("/grants") ? "active" : ""} to="/grants">Grants</Link><Link className={location.pathname.startsWith("/notifications") ? "active" : ""} to="/notifications">Signals</Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile">Profile</Link></nav><div className="product-nav-actions"><button className="search-trigger" onClick={() => setSearchOpen(true)}><SearchIcon size={15}/><span>Search network</span><kbd>⌘K</kbd></button><Link className="primary-button" to="/forge">Forge</Link></div></header>{children}<nav className="mobile-product-nav" aria-label="Mobile navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer"><SearchIcon size={17}/><span>Explore</span></Link><Link className={location.pathname === "/forge" ? "active" : ""} to="/forge"><Landmark size={17}/><span>Forge</span></Link><Link className={location.pathname === "/notifications" ? "active" : ""} to="/notifications"><Sparkles size={17}/><span>Signals</span></Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile"><Users size={17}/><span>Profile</span></Link></nav>{searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} onNavigate={(path) => { setSearchOpen(false); navigate(path); }}/>}</div>;
+  return <div className="product-shell"><header className="product-nav-shell"><Link className="brand-lockup" to="/sanctuary"><img className="brand-logo" src="/dreamers-dao-logo.svg" alt="Dreamers DAO"/><span><span className="eyebrow">THE DAO FOR DREAMERS</span><strong>Dreamers<span>-Dao</span></strong></span></Link><nav className="product-nav-links" aria-label="Product navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer">Explore</Link><Link className={location.pathname.startsWith("/grants") ? "active" : ""} to="/grants">Grants</Link><Link className={location.pathname.startsWith("/notifications") ? "active" : ""} to="/notifications">Signals</Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile">Profile</Link></nav><div className="product-nav-actions"><button className="search-trigger" onClick={() => setSearchOpen(true)}><SearchIcon size={15}/><span>Search network</span><kbd>⌘K</kbd></button><Link className="primary-button" to="/forge">Forge</Link></div></header><div className={`global-notice ${notice.tone}`} role="status">{notice.text}</div>{children}<nav className="mobile-product-nav" aria-label="Mobile navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer"><SearchIcon size={17}/><span>Explore</span></Link><Link className={location.pathname === "/forge" ? "active" : ""} to="/forge"><Landmark size={17}/><span>Forge</span></Link><Link className={location.pathname === "/notifications" ? "active" : ""} to="/notifications"><Sparkles size={17}/><span>Signals</span></Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile"><Users size={17}/><span>Profile</span></Link></nav>{searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} onNavigate={(path) => { setSearchOpen(false); navigate(path); }}/>}</div>;
 }
 
 function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate: (path: string) => void }) {

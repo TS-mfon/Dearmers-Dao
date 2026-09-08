@@ -6,6 +6,7 @@ import chat from "../server/chat.js";
 import daoCreation from "../server/dao-creation.js";
 import daos from "../server/daos.js";
 import delegations from "../server/delegations.js";
+import daoAdmin from "../server/dao-admin.js";
 import genlayer from "../server/genlayer.js";
 import grants from "../server/grants.js";
 import history from "../server/history.js";
@@ -21,7 +22,7 @@ import social from "../server/social.js";
 import votes from "../server/votes.js";
 
 const handlers: Record<string, (req: VercelRequest, res: VercelResponse) => unknown> = {
-  admin, announcements, assets, chat, "dao-creation": daoCreation, daos, delegations,
+  admin, announcements, assets, chat, "dao-creation": daoCreation, daos, delegations, "dao-admin": daoAdmin,
   genlayer, grants, history, media, members, membership, notifications, profile,
   proposals, reviews, search, social, votes,
 };

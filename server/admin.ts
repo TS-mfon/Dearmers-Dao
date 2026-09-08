@@ -20,7 +20,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = req.body || {};
     const wallet = String(req.query.wallet || body.wallet || "");
     if (!await isAdmin(db, identity, wallet)) return json(res, 403, { error: "Protocol admin authorization required." });
-    if (req.method === "GET") return json(res, 200, { users: await db.collection("profiles").find({}).sort({ updatedAt: -1 }).limit(100).toArray(), daos: await db.collection("daoIndex").find({}).sort({ updatedAt: -1 }).limit(100).toArray(), proposals: await db.collection("proposals").find({ status: { $in: ["tied", "manual_funding", "tied_pending_admin", "approved_pending_manual_transfer"] } }).sort({ updatedAt: -1 }).limit(100).toArray(), applications: await db.collection("membershipApplications").find({ status: "pending" }).sort({ createdAt: 1 }).limit(200).toArray() });
+    if (req.method === "GET") {
+      if (String(req.query.action || "") === "monitor") {
+        const checks = [{ name: "database", ok: true, detail: "MongoDB reachable" }, { name: "email", ok: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM), detail: process.env.RESEND_API_KEY && process.env.EMAIL_FROM ? "Resend configured" : "RESEND_API_KEY or EMAIL_FROM missing" }, { name: "genlayer", ok: Boolean(process.env.GENLAYER_ENDPOINT || process.env.VITE_GENLAYER_ENDPOINT), detail: process.env.GENLAYER_ENDPOINT || process.env.VITE_GENLAYER_ENDPOINT ? "Endpoint configured" : "Endpoint missing" }, { name: "rpc", ok: Boolean(process.env.BASE_SEPOLIA_RPC_URL || process.env.VITE_BASE_SEPOLIA_RPC_URL), detail: process.env.BASE_SEPOLIA_RPC_URL || process.env.VITE_BASE_SEPOLIA_RPC_URL ? "RPC configured" : "RPC missing" }, { name: "relayer", ok: Boolean(process.env.RELAYER_PRIVATE_KEY), detail: process.env.RELAYER_PRIVATE_KEY ? "Relayer key configured" : "Relayer key missing" }];
+        return json(res, 200, { checks, recentEmailJobs: await db.collection("emailJobs").find({}).sort({ updatedAt: -1 }).limit(10).toArray(), recentAudit: await db.collection("auditLogs").find({}).sort({ createdAt: -1 }).limit(10).toArray() });
+      }
+      return json(res, 200, { users: await db.collection("profiles").find({}, { projection: { email: 0 } }).sort({ updatedAt: -1 }).limit(100).toArray(), daos: await db.collection("daoIndex").find({}).sort({ updatedAt: -1 }).limit(100).toArray(), proposals: await db.collection("proposals").find({ status: { $in: ["tied", "manual_funding", "tied_pending_admin", "approved_pending_manual_transfer"] } }).sort({ updatedAt: -1 }).limit(100).toArray(), applications: await db.collection("membershipApplications").find({ status: "pending" }).sort({ createdAt: 1 }).limit(200).toArray(), emailJobs: await db.collection("emailJobs").find({}).sort({ updatedAt: -1 }).limit(50).toArray() });
+    }
     const action = String(req.query.action || body.action || "");
     if (["ban-user", "ban-dao"].includes(action)) {
       const collection = action === "ban-user" ? "profiles" : "daoIndex";
@@ -32,14 +38,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!title || !content) return json(res, 400, { error: "Bulletin title and body are required." });
       const eventKey = `protocol:${title.toLowerCase()}:${content.slice(0, 32)}`;
       const existing = await db.collection("announcements").findOne({ eventKey });
-      if (!existing) {
+      if (existing) return json(res, 200, { ok: true, duplicate: true, bulletinId: existing._id?.toString(), notifications: 0, email: { status: "already_published" } });
+      let email = { status: "not_attempted", sent: 0, error: "" };
+      let notificationCount = 0;
+      {
         const item = { scope: "protocol", eventKey, title: title.slice(0, 140), body: content.slice(0, 5000), createdAt: new Date(), createdBy: identity.sub };
         await db.collection("announcements").insertOne(item);
         const recipients = await db.collection("profiles").find({ emailVerified: true, emailNotifications: { $ne: false } }).project({ identity: 1, email: 1 }).toArray();
         const emails = recipients.map((recipient) => String(recipient.email || "")).filter(Boolean);
-        if (recipients.length) await db.collection("notifications").insertMany(recipients.map((recipient) => ({ identity: recipient.identity, kind: "protocol_bulletin", title: item.title, body: item.body, readAt: null, createdAt: new Date() })));
-        if (emails.length) { try { const delivery = await sendEmail({ to: emails, subject: item.title, html: `<h1>${escapeHtml(item.title)}</h1><p>${escapeHtml(item.body)}</p>`, eventKey }); await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "sent", providerId: delivery.id, sent: delivery.sent, updatedAt: new Date() } }, { upsert: true }); } catch (error) { await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "failed", error: safeError(error), updatedAt: new Date() } }, { upsert: true }); } }
+        if (recipients.length) { await db.collection("notifications").insertMany(recipients.map((recipient) => ({ identity: recipient.identity, kind: "protocol_bulletin", title: item.title, body: item.body, readAt: null, createdAt: new Date(), targetUrl: "/control-room/bulletin" }))); notificationCount = recipients.length; }
+        if (emails.length) { try { const delivery = await sendEmail({ to: emails, subject: item.title, html: `<h1>${escapeHtml(item.title)}</h1><p>${escapeHtml(item.body)}</p>`, eventKey }); email = { status: "sent", sent: delivery.sent, error: "" }; await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "sent", providerId: delivery.id, sent: delivery.sent, updatedAt: new Date() } }, { upsert: true }); } catch (error) { email = { status: "failed", sent: 0, error: safeError(error) }; await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "failed", error: safeError(error), updatedAt: new Date() } }, { upsert: true }); } }
+        else email = { status: "skipped", sent: 0, error: "No opted-in recipients with verified email." };
       }
+      await db.collection("auditLogs").insertOne({ scopeId: "protocol", type: action, actor: identity.sub, target: eventKey, createdAt: new Date() });
+      return json(res, 200, { ok: true, duplicate: false, bulletinId: eventKey, notifications: notificationCount, email });
     } else if (action === "approve-membership" || action === "reject-membership") {
       const applicationId = String(body.applicationId || "");
       if (!ObjectId.isValid(applicationId)) return json(res, 400, { error: "A valid membership application is required." });
@@ -61,6 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await db.collection("proposals").updateOne(query, { $set: { status: "manually_funded", fundingReference: String(body.reference).slice(0, 300), fundedBy: identity.sub, updatedAt: new Date() } });
     } else return json(res, 400, { error: "Unsupported admin action." });
     await db.collection("auditLogs").insertOne({ scopeId: "protocol", type: action, actor: identity.sub, target: body.target || body.proposalId || null, createdAt: new Date() });
-    return json(res, 200, { ok: true });
+    return json(res, 200, { ok: true, action });
   } catch (error) { return json(res, 500, { error: safeError(error) }); }
 }
