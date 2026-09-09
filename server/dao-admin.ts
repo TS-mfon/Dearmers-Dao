@@ -30,6 +30,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const weeklyCap = Number(body.weeklyCap);
       if (!Number.isFinite(weeklyCap) || weeklyCap < 0) return json(res, 400, { error: "Weekly cap must be a non-negative number." });
       await db.collection("daoIndex").updateOne({ daoId }, { $set: { weeklyCap, updatedAt: new Date() } });
+    } else if (action === "update-media") {
+      const logoUri = String(body.logoUri || "").trim();
+      const bannerUri = String(body.bannerUri || "").trim();
+      if (!logoUri && !bannerUri) return json(res, 400, { error: "Upload a DAO logo or banner first." });
+      await db.collection("daoIndex").updateOne({ daoId }, { $set: { ...(logoUri ? { logoUri } : {}), ...(bannerUri ? { bannerUri } : {}), updatedAt: new Date() } });
     } else return json(res, 400, { error: "Unsupported DAO admin action." });
     await db.collection("auditLogs").insertOne({ scopeId: daoId, type: action, actor: identity.sub, target: body.proposalId || null, createdAt: new Date() });
     return json(res, 200, { ok: true, action });
