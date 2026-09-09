@@ -1,11 +1,12 @@
+import { useCallback } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 
 export function useSessionHeaders() {
   const { getAccessToken } = usePrivy();
-  return async (): Promise<Record<string, string>> => {
+  return useCallback(async (): Promise<Record<string, string>> => {
     const token = await getAccessToken();
     return token ? { authorization: `Bearer ${token}` } : {};
-  };
+  }, [getAccessToken]);
 }
 
 export async function jsonRequest(path: string, init: RequestInit = {}) {

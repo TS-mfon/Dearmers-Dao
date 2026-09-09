@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, Check, ImagePlus, Settings, Shield, Users } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { useSessionHeaders } from "../lib/session";
@@ -14,7 +14,8 @@ export function DaoAdminRoute({ onNotice }: { onNotice: (notice: Notice) => void
   const [cap, setCap] = useState("");
   const [reference, setReference] = useState(""); const [mediaBusy, setMediaBusy] = useState(false);
   const [loading, setLoading] = useState(true);
-  const load = useCallback(async () => { try { setLoading(true); const response = await fetch(`/api/dao-admin?daoId=${encodeURIComponent(daoId || "")}`, { headers: await headers() }); const body = await response.json(); if (!response.ok) throw new Error(body.error || "DAO control room unavailable."); setData(body); setCap(String(body.dao?.weeklyCap || "")); } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "DAO control room unavailable." }); } finally { setLoading(false); } }, [daoId, headers, onNotice]);
+  const initialized = useRef(false);
+  const load = useCallback(async () => { try { if (!initialized.current) setLoading(true); const response = await fetch(`/api/dao-admin?daoId=${encodeURIComponent(daoId || "")}`, { headers: await headers() }); const body = await response.json(); if (!response.ok) throw new Error(body.error || "DAO control room unavailable."); setData(body); setCap(String(body.dao?.weeklyCap || "")); initialized.current = true; } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "DAO control room unavailable." }); } finally { setLoading(false); } }, [daoId, headers, onNotice]);
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
   const action = async (payload: Record<string, unknown>) => { try { const response = await fetch(`/api/dao-admin?daoId=${encodeURIComponent(daoId || "")}&action=${encodeURIComponent(String(payload.action))}`, { method: "POST", headers: { ...(await headers()), "content-type": "application/json" }, body: JSON.stringify({ daoId, ...payload }) }); const body = await response.json(); if (!response.ok) throw new Error(body.error || "DAO action failed."); onNotice({ tone: "success", text: "DAO control-room action recorded." }); await load(); } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "DAO action failed." }); } };
   const saveSettings = (event: FormEvent) => { event.preventDefault(); void action({ action: "settings", weeklyCap: cap }); };
