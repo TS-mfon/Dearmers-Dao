@@ -191,7 +191,16 @@ export async function getDao(daoId: Hash): Promise<DaoRecord> {
 export async function listDaos(): Promise<DaoRecord[]> {
   const ids = await getDaoIds();
   const records = await Promise.all(ids.map(getDao));
-  return records.map((record) => normalizeDaoRecord(record));
+  const indexed = await fetch("/api/daos").then(async (response) => {
+    if (!response.ok) return [] as Array<Partial<DaoRecord> & { metadata?: unknown; logoUrl?: string; bannerUrl?: string }>;
+    const body = await response.json() as { daos?: Array<Partial<DaoRecord> & { metadata?: unknown; logoUrl?: string; bannerUrl?: string }> };
+    return body.daos || [];
+  }).catch(() => [] as Array<Partial<DaoRecord> & { metadata?: unknown; logoUrl?: string; bannerUrl?: string }>);
+  const indexedById = new Map(indexed.map((record) => [String(record.daoId).toLowerCase(), normalizeDaoRecord(record)]));
+  return records.map((record) => {
+    const indexedRecord = indexedById.get(String(record.daoId).toLowerCase());
+    return normalizeDaoRecord({ ...record, ...indexedRecord, metadataUri: indexedRecord?.metadataUri || record.metadataUri });
+  });
 }
 
 export async function writeDao(dao: Address, functionName: string, args: readonly unknown[] = []) {
