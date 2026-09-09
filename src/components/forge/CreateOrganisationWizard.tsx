@@ -28,7 +28,7 @@ async function uploadImage(file: File) {
   return body.url;
 }
 async function postJson(path: string, payload: unknown, auth: Record<string, string> = {}): Promise<Record<string, unknown>> {
-  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(payload) });
+  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(payload, (_key, value) => typeof value === "bigint" ? value.toString() : value) });
   const body = await response.json().catch(() => ({})) as { error?: string };
   if (!response.ok) throw new Error(body.error || `${path} failed with HTTP ${response.status}.`);
   return body;
