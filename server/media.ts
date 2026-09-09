@@ -4,7 +4,7 @@ import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { bearerIdentity } from "./_privy.js";
 
-const mimeTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+const mimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {

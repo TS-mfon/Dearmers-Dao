@@ -7,12 +7,18 @@ import { ObjectId } from "mongodb";
 
 async function hydrateDaoMedia(db: Awaited<ReturnType<typeof database>>, dao: Record<string, unknown>) {
   if (dao.logoUri && dao.bannerUri) return dao;
-  const job = await db.collection("daoCreationJobs").findOne({ daoId: String(dao.daoId) }, { projection: { actor: 1 } });
+  const job = await db.collection("daoCreationJobs").findOne({ daoId: String(dao.daoId) }, { projection: { actor: 1, createdAt: 1, updatedAt: 1 } });
   if (!job?.actor) return dao;
-  const files = await db.collection("media.files").find({ "metadata.owner": String(job.actor) }).sort({ uploadDate: -1 }).limit(20).toArray();
+  const createdAt = job.createdAt instanceof Date ? job.createdAt : job.updatedAt instanceof Date ? job.updatedAt : null;
+  const mediaQuery: Record<string, unknown> = { "metadata.owner": String(job.actor) };
+  if (createdAt) mediaQuery.uploadDate = { $gte: new Date(createdAt.getTime() - 30 * 60_000), $lte: new Date(createdAt.getTime() + 30 * 60_000) };
+  const files = await db.collection("media.files").find(mediaQuery).sort({ uploadDate: 1 }).limit(20).toArray();
   const latest = (kind: string) => files.find((file) => String((file.metadata as { kind?: string } | undefined)?.kind || "") === kind);
-  const logo = dao.logoUri || (latest("avatar")?._id instanceof ObjectId ? `/api/media?id=${latest("avatar")?._id.toHexString()}` : "");
-  const banner = dao.bannerUri || (latest("banner")?._id instanceof ObjectId ? `/api/media?id=${latest("banner")?._id.toHexString()}` : "");
+  const avatarFiles = files.filter((file) => String((file.metadata as { kind?: string } | undefined)?.kind || "") === "avatar");
+  const logoFile = latest("avatar") || avatarFiles[0] || files[0];
+  const bannerFile = latest("banner") || [...files].reverse().find((file) => file._id !== logoFile?._id) || files[0];
+  const logo = dao.logoUri || (logoFile?._id instanceof ObjectId ? `/api/media?id=${logoFile._id.toHexString()}` : "");
+  const banner = dao.bannerUri || (bannerFile?._id instanceof ObjectId ? `/api/media?id=${bannerFile._id.toHexString()}` : "");
   if (!logo && !banner) return dao;
   await db.collection("daoIndex").updateOne({ daoId: String(dao.daoId) }, { $set: { logoUri: logo, bannerUri: banner, updatedAt: new Date() } });
   return { ...dao, logoUri: logo, bannerUri: banner };
