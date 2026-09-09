@@ -4,24 +4,14 @@ import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { verifyWallet } from "./_auth.js";
 import { ObjectId } from "mongodb";
-
-async function hydrateDaoMedia(db: Awaited<ReturnType<typeof database>>, dao: Record<string, unknown>) {
-  if (dao.logoUri && dao.bannerUri) return dao;
-  const job = await db.collection("daoCreationJobs").findOne({ daoId: String(dao.daoId) }, { projection: { actor: 1, createdAt: 1, updatedAt: 1 } });
-  if (!job?.actor) return dao;
-  const createdAt = job.createdAt instanceof Date ? job.createdAt : job.updatedAt instanceof Date ? job.updatedAt : null;
-  const mediaQuery: Record<string, unknown> = { "metadata.owner": String(job.actor) };
-  if (createdAt) mediaQuery.uploadDate = { $gte: new Date(createdAt.getTime() - 30 * 60_000), $lte: new Date(createdAt.getTime() + 30 * 60_000) };
-  const files = await db.collection("media.files").find(mediaQuery).sort({ uploadDate: 1 }).limit(20).toArray();
-  const latest = (kind: string) => files.find((file) => String((file.metadata as { kind?: string } | undefined)?.kind || "") === kind);
-  const avatarFiles = files.filter((file) => String((file.metadata as { kind?: string } | undefined)?.kind || "") === "avatar");
-  const logoFile = latest("avatar") || avatarFiles[0] || files[0];
-  const bannerFile = latest("banner") || [...files].reverse().find((file) => file._id !== logoFile?._id) || files[0];
-  const logo = dao.logoUri || (logoFile?._id instanceof ObjectId ? `/api/media?id=${logoFile._id.toHexString()}` : "");
-  const banner = dao.bannerUri || (bannerFile?._id instanceof ObjectId ? `/api/media?id=${bannerFile._id.toHexString()}` : "");
-  if (!logo && !banner) return dao;
-  await db.collection("daoIndex").updateOne({ daoId: String(dao.daoId) }, { $set: { logoUri: logo, bannerUri: banner, updatedAt: new Date() } });
-  return { ...dao, logoUri: logo, bannerUri: banner };
+async function resolveDaoMedia(db: Awaited<ReturnType<typeof database>>, dao: Record<string, unknown>) {
+  const daoId = String(dao.daoId || "");
+  const mediaIds = { logo: String(dao.logoMediaId || ""), banner: String(dao.bannerMediaId || "") };
+  const ids = Object.values(mediaIds).filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
+  const files = ids.length ? await db.collection("media.files").find({ _id: { $in: ids }, "metadata.scope": "dao", "metadata.resourceId": daoId }).toArray() : [];
+  const byId = new Map(files.map((file) => [String(file._id), file]));
+  const uri = (id: string) => { const file = byId.get(id); return file?._id instanceof ObjectId ? `/api/media?id=${file._id.toHexString()}` : ""; };
+  return { ...dao, logoUri: uri(mediaIds.logo), bannerUri: uri(mediaIds.banner) };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -32,19 +22,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const daoId = String(req.query.daoId || "").trim();
       if (daoId) {
         const found = await db.collection("daoIndex").findOne({ daoId, banned: { $ne: true } }, { projection: { _id: 0 } });
-        const dao = found ? await hydrateDaoMedia(db, found) : null;
+        const dao = found ? await resolveDaoMedia(db, found) : null;
         if (!dao) return json(res, 404, { error: "DAO not found." });
         return json(res, 200, { dao });
       }
       const query = String(req.query.q || "").trim();
       const filter = query ? { $or: [{ name: new RegExp(query, "i") }, { description: new RegExp(query, "i") }, { category: new RegExp(query, "i") }], banned: { $ne: true } } : { banned: { $ne: true } };
       const records = await db.collection("daoIndex").find(filter).sort({ mode: -1, updatedAt: -1 }).limit(100).project({ _id: 0 }).toArray();
-      return json(res, 200, { daos: await Promise.all(records.map((record) => hydrateDaoMedia(db, record))) });
+      return json(res, 200, { daos: await Promise.all(records.map((record) => resolveDaoMedia(db, record))) });
     }
-    const { wallet, signature, daoId, dao, admin, name, mode, metadata, bannerUri, logoUri, description, category } = req.body || {};
+    const { wallet, signature, daoId, dao, admin, name, mode, metadata, description, category } = req.body || {};
     if (!wallet || !signature || !daoId || !dao || !name || !await verifyWallet("index-dao", wallet as Address, String(daoId), signature as Hex)) return json(res, 401, { error: "Valid admin authorization required." });
     if (String(wallet).toLowerCase() !== String(admin).toLowerCase()) return json(res, 403, { error: "Only the bound DAO admin can index this covenant." });
-    await db.collection("daoIndex").updateOne({ daoId: String(daoId) }, { $set: { daoId: String(daoId), dao: String(dao), admin: String(admin).toLowerCase(), name: String(name), mode: Number(mode) || 0, metadata, bannerUri: bannerUri || "", logoUri: logoUri || "", description: description || "", category: category || "", active: true, updatedAt: new Date() } }, { upsert: true });
+    await db.collection("daoIndex").updateOne({ daoId: String(daoId) }, { $set: { daoId: String(daoId), dao: String(dao), admin: String(admin).toLowerCase(), name: String(name), mode: Number(mode) || 0, metadata, bannerUri: "", logoUri: "", description: description || "", category: category || "", active: true, updatedAt: new Date() } }, { upsert: true });
     return json(res, 200, { ok: true });
   } catch (error) { return json(res, 500, { error: safeError(error) }); }
 }

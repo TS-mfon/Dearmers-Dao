@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "automation:reconcile": "tsx scripts/reconcile.ts",
+    "migration:media": "tsx scripts/migrate-media.ts",
     "check:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {

@@ -33,6 +33,7 @@ export async function database(): Promise<Db> {
       db.collection("proposalIntents").createIndex({ proposalKey: 1, actor: 1 }, { unique: true }),
       db.collection("emailJobs").createIndex({ eventKey: 1 }, { unique: true }),
       db.collection("auditLogs").createIndex({ scopeId: 1, createdAt: -1 }),
+      db.collection("media.files").createIndex({ "metadata.scope": 1, "metadata.resourceId": 1, "metadata.purpose": 1 }),
     ]).then(() => undefined);
   })();
   await indexesPromise;

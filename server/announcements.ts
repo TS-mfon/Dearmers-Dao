@@ -3,6 +3,7 @@ import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
 import { escapeHtml, sendEmail } from "./_email.js";
+import { findDaoForIdentity } from "./dao-auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
@@ -12,8 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const { daoId, title, body, ctaUrl } = req.body || {};
     if (!daoId || !title || !body) return json(res, 400, { error: "DAO, title, and body are required." });
-    const profile = await db.collection("profiles").findOne({ identity: `privy:${identity.sub}` });
-    const dao = await db.collection("daoIndex").findOne({ daoId: String(daoId), admin: String(req.body.wallet || profile?.wallet || "").toLowerCase(), banned: { $ne: true } });
+    const dao = await findDaoForIdentity(db, String(daoId), identity, String(req.body.wallet || ""));
     if (!dao) return json(res, 403, { error: "Only the bound DAO admin can publish announcements." });
     const eventKey = `dao:${daoId}:announcement:${String(title).toLowerCase()}:${String(body).slice(0, 32)}`;
     const existing = await db.collection("announcements").findOne({ eventKey });

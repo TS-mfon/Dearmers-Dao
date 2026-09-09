@@ -5,6 +5,7 @@ import { baseSepolia } from "viem/chains";
 import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
+import { ObjectId } from "mongodb";
 
 function address(value: unknown) { return String(value || "").trim() as Address; }
 const registryAbi = [{ type: "function", name: "createDAOFor", inputs: [{ name: "admin", type: "address" }, { name: "daoId", type: "bytes32" }, { name: "treasury", type: "address" }, { name: "mode", type: "uint8" }, { name: "reviewOracle", type: "address" }, { name: "executor", type: "address" }, { name: "name", type: "string" }, { name: "metadataUri", type: "string" }], outputs: [{ name: "daoAddress", type: "address" }], stateMutability: "nonpayable" }, { type: "event", name: "DAOCreated", inputs: [{ name: "daoId", type: "bytes32", indexed: true }, { name: "dao", type: "address", indexed: true }, { name: "admin", type: "address", indexed: true }, { name: "mode", type: "uint8", indexed: false }, { name: "name", type: "string", indexed: false }] }] as const;
@@ -52,7 +53,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const metadata = String(body.metadataUri);
     let metadataFields: { logoUri?: string; bannerUri?: string; tags?: string[]; rules?: string } = {};
     try { metadataFields = JSON.parse(metadata) as typeof metadataFields; } catch { /* Keep the submitted top-level fields when metadata is not JSON. */ }
-    await db.collection("daoIndex").updateOne({ daoId }, { $set: { daoId, dao: daoAddress.toLowerCase(), admin: treasury.toLowerCase(), treasury: treasury.toLowerCase(), name, mode: Number(body.mode) || 0, metadata, description: String(body.description || ""), mission: String(body.mission || ""), constitution: String(body.constitution || ""), category: String(body.category || ""), access: String(body.access || "public"), gate: body.gate || null, logoUri: String(body.logoUri || metadataFields.logoUri || ""), bannerUri: String(body.bannerUri || metadataFields.bannerUri || ""), tags: metadataFields.tags || [], rules: metadataFields.rules || "", treasuryPolicy: { weeklyUsdcLimit: String(body.weeklyLimit || "0"), executor: executor.toLowerCase() }, active: true, updatedAt: new Date() } }, { upsert: true });
+    const mediaIds: { logoMediaId?: string; bannerMediaId?: string } = {};
+    for (const [field, purpose] of [["logoMediaId", "dao-logo"], ["bannerMediaId", "dao-banner"]] as const) {
+      const uri = String(field === "logoMediaId" ? body.logoUri || metadataFields.logoUri || "" : body.bannerUri || metadataFields.bannerUri || "");
+      const mediaId = uri.match(/[?&]id=([a-f0-9]{24})$/i)?.[1];
+      if (!mediaId || !ObjectId.isValid(mediaId)) continue;
+      const result = await db.collection("media.files").updateOne({ _id: new ObjectId(mediaId), "metadata.scope": "dao", "metadata.resourceId": clientKey, "metadata.ownerIdentity": identity.sub, "metadata.purpose": purpose }, { $set: { "metadata.resourceId": daoId, "metadata.boundDaoId": daoId, "metadata.boundAt": new Date() } });
+      if (result.modifiedCount) mediaIds[field] = mediaId;
+    }
+    await db.collection("daoIndex").updateOne({ daoId }, { $set: { daoId, dao: daoAddress.toLowerCase(), admin: treasury.toLowerCase(), adminIdentity: identity.sub, treasury: treasury.toLowerCase(), name, mode: Number(body.mode) || 0, metadata, description: String(body.description || ""), mission: String(body.mission || ""), constitution: String(body.constitution || ""), category: String(body.category || ""), access: String(body.access || "public"), gate: body.gate || null, ...mediaIds, logoUri: "", bannerUri: "", tags: metadataFields.tags || [], rules: metadataFields.rules || "", treasuryPolicy: { weeklyUsdcLimit: String(body.weeklyLimit || "0"), executor: executor.toLowerCase() }, active: true, updatedAt: new Date() } }, { upsert: true });
     await db.collection("delegations").updateOne({ creationKey: clientKey }, { $set: { daoId, daoAddress: daoAddress.toLowerCase(), updatedAt: new Date() } });
     await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "indexed", daoAddress: daoAddress.toLowerCase(), txHash: hash, receiptBlock: receipt.blockNumber.toString(), createdAt: new Date(), updatedAt: new Date() } });
     return json(res, 201, { ok: true, daoId, daoAddress: daoAddress.toLowerCase(), txHash: hash, status: "indexed", indexed: true });

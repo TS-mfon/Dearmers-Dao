@@ -13,6 +13,10 @@ Dearmers-Dao intentionally keeps every DAO treasury isolated. Do not use one tre
 7. From the DAO treasury EOA, create its MetaMask ERC-7715 periodic USDC delegation. The delegation is stored against the creation idempotency key before the platform creates the DAO.
 8. Store automation, MongoDB, email, and review-oracle secrets in GitHub and Vercel.
 
+## Media ownership migration
+
+Before enabling the new DAO media resolver, run `npm run migration:media` with the production MongoDB environment loaded. This is a dry run and reports every legacy DAO logo/banner association that cannot be proven DAO-owned. After reviewing the report, run `npm run migration:media -- --apply` to clear only those unprovable associations and record audit events. Do not restore heuristic creator-upload recovery; upload replacements through the DAO control room so each asset is stored with an explicit DAO scope and purpose.
+
 ## Constitution argument defaults for the demo
 
 Use these as deployment-call arguments, not hidden policy:

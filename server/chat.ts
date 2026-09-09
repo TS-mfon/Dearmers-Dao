@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
+import { findDaoForIdentity } from "./dao-auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
@@ -12,8 +13,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!daoId) return json(res, 400, { error: "DAO id is required." });
     const member = await db.collection("daoMembers").findOne({ daoId, actor: identity.sub, status: "active" });
     const dao = await db.collection("daoIndex").findOne({ daoId });
+    const admin = dao ? await findDaoForIdentity(db, daoId, identity) : null;
+    if (!member && !admin) return json(res, 403, { error: "DAO membership is required for chat." });
     const profile = await db.collection("profiles").findOne({ identity: `privy:${identity.sub}` });
-    if (!member && dao?.admin !== String(profile?.wallet || identity.wallet || "").toLowerCase()) return json(res, 403, { error: "DAO membership is required for chat." });
     if (req.method === "GET") {
       const before = req.query.before ? new Date(String(req.query.before)) : new Date();
       const messages = await db.collection("chatMessages").find({ daoId, createdAt: { $lt: before } }).sort({ createdAt: -1 }).limit(50).toArray();

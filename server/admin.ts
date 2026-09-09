@@ -4,11 +4,11 @@ import { method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
 import { escapeHtml, sendEmail } from "./_email.js";
 import { ObjectId } from "mongodb";
+import { verifyWallet } from "./_auth.js";
 
 const admins = () => new Set((process.env.ADMIN_WALLETS || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
 async function isAdmin(db: Awaited<ReturnType<typeof database>>, identity: { sub: string; wallet?: string }, wallet: string) {
-  const profile = await db.collection("profiles").findOne({ identity: `privy:${identity.sub}` });
-  const candidate = String(wallet || identity.wallet || profile?.wallet || "").toLowerCase();
+  const candidate = String(wallet || identity.wallet || "").toLowerCase();
   return Boolean(candidate && admins().has(candidate));
 }
 
@@ -18,7 +18,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const db = await database();
     const body = req.body || {};
-    const wallet = String(req.query.wallet || body.wallet || "");
+    const wallet = String(req.query.wallet || body.wallet || "").toLowerCase();
+    const requestedAction = String(req.query.action || body.action || "read");
+    const signature = String(req.query.signature || body.signature || "");
+    if (req.method === "POST" && (!signature || !await verifyWallet(`admin:${requestedAction}`, wallet as `0x${string}`, requestedAction, signature as `0x${string}`).catch(() => false))) return json(res, 401, { error: "Sign the protocol admin request with the connected wallet." });
     if (!await isAdmin(db, identity, wallet)) return json(res, 403, { error: "Protocol admin authorization required." });
     if (req.method === "GET") {
       if (String(req.query.action || "") === "monitor") {

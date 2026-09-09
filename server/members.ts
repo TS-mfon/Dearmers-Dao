@@ -2,6 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
+import { findDaoForIdentity } from "./dao-auth.js";
+import { ObjectId } from "mongodb";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
@@ -17,13 +19,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return json(res, 200, { members, applications });
     }
     const identity = await requirePrivyIdentity(req.headers.authorization);
-    const profile = await db.collection("profiles").findOne({ identity: `privy:${identity.sub}` });
-    const dao = await db.collection("daoIndex").findOne({ daoId, admin: String(profile?.wallet || identity.wallet || "").toLowerCase(), banned: { $ne: true } });
+    const dao = await findDaoForIdentity(db, daoId, identity, String(req.body?.wallet || ""));
     if (!dao) return json(res, 403, { error: "DAO admin authorization required." });
     const applicationId = String(req.body?.applicationId || "");
     const decision = String(req.body?.decision || "");
     if (!applicationId || !["approve", "reject"].includes(decision)) return json(res, 400, { error: "Application and decision are required." });
-    const application = await db.collection("membershipApplications").findOne({ _id: applicationId as never, daoId });
+    const application = ObjectId.isValid(applicationId) ? await db.collection("membershipApplications").findOne({ _id: new ObjectId(applicationId), daoId }) : null;
     if (!application) return json(res, 404, { error: "Membership application not found." });
     const status = decision === "approve" ? "approved" : "rejected";
     await db.collection("membershipApplications").updateOne({ _id: application._id }, { $set: { status, decidedBy: identity.sub, decidedAt: new Date() } });

@@ -52,7 +52,7 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
 
   const publicTarget = (profile.identity || profile.wallet || "").toLowerCase();
   useEffect(() => {
-    if (!publicTarget || isOwner) return;
+    if (!publicTarget) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -97,7 +97,8 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
       const token = await getAccessToken();
       const reader = new FileReader();
       const data = await new Promise<string>((resolve, reject) => { reader.onerror = () => reject(new Error("The photo could not be read.")); reader.onload = () => resolve(String(reader.result).split(",")[1] || ""); reader.readAsDataURL(file); });
-      const body = await responseBody<{ url: string }>(await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data, kind }) }));
+      const profileResource = profile.identity || profileIdentity || profile.wallet || profileWallet;
+      const body = await responseBody<{ url: string }>(await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data, scope: "profile", resourceId: profileResource, purpose: kind === "banner" ? "profile-banner" : "profile-avatar" }) }));
       setDraft((current) => ({ ...current, ...(kind === "banner" ? { bannerUrl: body.url } : { avatarUrl: body.url }) }));
       onNotice({ tone: "success", text: `${kind === "banner" ? "Banner" : "Photo"} uploaded. Save your profile to publish it.` });
     } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Photo upload failed." }); }
