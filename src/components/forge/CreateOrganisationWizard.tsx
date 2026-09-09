@@ -20,16 +20,22 @@ type Draft = { mode: DaoMode | ""; name: string; description: string; mission: s
 const initialDraft: Draft = { mode: "", name: "", description: "", mission: "", rules: "", constitution: "", category: "", tags: "", access: "public", weeklyLimit: "1000", gateChain: "base", gateToken: "", logoUri: "", bannerUri: "" };
 
 
-async function uploadImage(file: File, auth: Record<string, string>) {
-  if (file.size > 2_500_000) throw new Error("Images must be smaller than 2.5 MB.");
+async function uploadImage(file: File, auth: Record<string, string>, kind: "avatar" | "banner" = "avatar") {
+  const maxBytes = kind === "banner" ? 5_000_000 : 2_500_000;
+  if (file.size > maxBytes) throw new Error(`Images must be smaller than ${kind === "banner" ? "5" : "2.5"} MB.`);
   const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1] || ""); reader.onerror = () => reject(new Error("Could not read image.")); reader.readAsDataURL(file); });
-  const response = await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data }) });
+  const response = await fetch("/api/media", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data, kind }) });
   const body = await response.json() as { url?: string; error?: string };
   if (!response.ok || !body.url) throw new Error(body.error || "Image upload failed.");
   return body.url;
 }
 async function postJson(path: string, payload: unknown, auth: Record<string, string> = {}): Promise<Record<string, unknown>> {
-  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(payload, (_key, value) => typeof value === "bigint" ? value.toString() : value) });
+  const source = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  let enriched = payload;
+  if (path === "/api/dao-creation" && typeof source.metadataUri === "string") {
+    try { const metadata = JSON.parse(source.metadataUri) as { logoUri?: string; bannerUri?: string }; enriched = { ...source, logoUri: source.logoUri || metadata.logoUri || "", bannerUri: source.bannerUri || metadata.bannerUri || "" }; } catch { enriched = payload; }
+  }
+  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(enriched, (_key, value) => typeof value === "bigint" ? value.toString() : value) });
   const body = await response.json().catch(() => ({})) as { error?: string };
   if (!response.ok) throw new Error(body.error || `${path} failed with HTTP ${response.status}.`);
   return body;
