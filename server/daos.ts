@@ -9,6 +9,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const db = await database();
     if (req.method === "GET") {
+      const daoId = String(req.query.daoId || "").trim();
+      if (daoId) {
+        const dao = await db.collection("daoIndex").findOne({ daoId, banned: { $ne: true } }, { projection: { _id: 0 } });
+        if (!dao) return json(res, 404, { error: "DAO not found." });
+        return json(res, 200, { dao });
+      }
       const query = String(req.query.q || "").trim();
       const filter = query ? { $or: [{ name: new RegExp(query, "i") }, { description: new RegExp(query, "i") }, { category: new RegExp(query, "i") }], banned: { $ne: true } } : { banned: { $ne: true } };
       return json(res, 200, { daos: await db.collection("daoIndex").find(filter).sort({ mode: -1, updatedAt: -1 }).limit(100).toArray() });

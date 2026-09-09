@@ -109,6 +109,36 @@ export function parseDaoMetadata(value: string): Partial<DaoMetadata> {
   }
 }
 
+type DaoSource = Partial<DaoRecord> & { metadata?: unknown; logoUrl?: string; bannerUrl?: string };
+
+export function normalizeDaoRecord(source: DaoSource): DaoRecord {
+  const metadataValue = typeof source.metadata === "string" ? source.metadata : JSON.stringify(source.metadata || {});
+  const metadata = parseDaoMetadata(String(source.metadataUri || metadataValue));
+  const record = source as DaoRecord;
+  const nested = metadata as Partial<DaoMetadata> & { logoUrl?: string; bannerUrl?: string };
+  return {
+    ...record,
+    daoId: String(source.daoId || "") as Hash,
+    name: String(source.name || "Unnamed DAO"),
+    metadataUri: String(source.metadataUri || metadataValue),
+    logoUri: String(source.logoUri || source.logoUrl || nested.logoUri || nested.logoUrl || ""),
+    bannerUri: String(source.bannerUri || source.bannerUrl || nested.bannerUri || nested.bannerUrl || ""),
+    description: source.description || metadata.description || "",
+    category: source.category || metadata.category || "",
+    mission: source.mission || metadata.mission || "",
+    rules: source.rules || metadata.rules || "",
+    constitution: source.constitution || metadata.constitution || "",
+    tags: source.tags || metadata.tags || [],
+    access: source.access || metadata.access || "public",
+    treasuryPolicy: source.treasuryPolicy || metadata.treasuryPolicy,
+    gateChain: source.gateChain || metadata.gate?.chain,
+    gateAsset: source.gateAsset || metadata.gate?.asset,
+    gateStandard: source.gateStandard || metadata.gate?.standard,
+    gateName: source.gateName || metadata.gate?.name,
+    gateSymbol: source.gateSymbol || metadata.gate?.symbol,
+  };
+}
+
 export async function walletClient() {
   const provider = injectedProvider();
   await ensureBaseSepolia(provider);
@@ -161,27 +191,7 @@ export async function getDao(daoId: Hash): Promise<DaoRecord> {
 export async function listDaos(): Promise<DaoRecord[]> {
   const ids = await getDaoIds();
   const records = await Promise.all(ids.map(getDao));
-  return records.map((record) => {
-    const metadata = parseDaoMetadata(record.metadataUri);
-    return {
-      ...record,
-      description: metadata.description || record.description,
-      category: metadata.category || record.category,
-      logoUri: metadata.logoUri || record.logoUri,
-      bannerUri: metadata.bannerUri || record.bannerUri,
-      gateChain: metadata.gate?.chain || record.gateChain,
-      gateAsset: metadata.gate?.asset || record.gateAsset,
-      gateStandard: metadata.gate?.standard || record.gateStandard,
-      gateName: metadata.gate?.name || record.gateName,
-      gateSymbol: metadata.gate?.symbol || record.gateSymbol,
-      mission: metadata.mission,
-      rules: metadata.rules,
-      constitution: metadata.constitution,
-      tags: metadata.tags,
-      access: metadata.access,
-      treasuryPolicy: metadata.treasuryPolicy,
-    };
-  });
+  return records.map((record) => normalizeDaoRecord(record));
 }
 
 export async function writeDao(dao: Address, functionName: string, args: readonly unknown[] = []) {
