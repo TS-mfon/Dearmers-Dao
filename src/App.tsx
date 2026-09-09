@@ -11,6 +11,7 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { CreateProposalRoute, DaoAnnouncementsRoute, DaoChatRoute, DaoHistoryRoute, DaoMembersRoute, DaoOverviewRoute, DaoProposalsRoute, GrantApplyRoute, GrantDetailRoute, GrantExplorerRoute, ProposalDetailRoute } from "./pages/DaoRoutes";
 import { AdminBulletinRoute, AdminDashboardRoute, AdminMembersRoute, AdminProposalsRoute, AdminSettingsRoute } from "./pages/AdminRoutes";
 import { DaoAdminRoute } from "./pages/DaoAdminRoute";
+import { DaoCreationStatusPage } from "./pages/DaoCreationStatusPage";
 import "./App.css";
 
 type Notice = { tone: "info" | "success" | "error"; text: string };
@@ -42,10 +43,12 @@ function App() {
   useEffect(() => { const timer = window.setTimeout(() => void refresh(), 0); return () => window.clearTimeout(timer); }, [refresh]);
 
   const created = async (daoId: Hash) => { await refresh(); const record = (await listDaos()).find((item) => item.daoId === daoId); if (record) setSelected(record); };
-  return <BrowserRouter><OnboardingGate onConnect={connect}><ProductShell notice={notice}><Routes>
+  const signOut = () => { setAccount(""); setSelected(null); setNotice({ tone: "info", text: "You have been signed out." }); };
+  return <BrowserRouter><OnboardingGate onConnect={connect}><ProductShell notice={notice} onSignOut={signOut}><Routes>
     <Route path="/" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/sanctuary" element={<SanctuaryLanding account={account} onConnect={connect} />} />
     <Route path="/explorer" element={<ExplorerPage daos={daos} />} />
+    <Route path="/dao-creation/:clientKey" element={<DaoCreationStatusPage />} />
     <Route path="/dao/:daoId" element={<DaoOverviewRoute daos={daos} account={account} onNotice={setNotice} />} />
     <Route path="/dao/:daoId/overview" element={<DaoOverviewRoute daos={daos} account={account} onNotice={setNotice} />} />
     <Route path="/dao/:daoId/proposals" element={<DaoProposalsRoute daos={daos} account={account} onNotice={setNotice} />} />
@@ -81,10 +84,11 @@ function App() {
   </Routes></ProductShell></OnboardingGate>{busy && <div className="busy-overlay"><RefreshCw className="spin"/><strong>{busy}</strong><span>Confirm in your wallet and keep this tab open.</span></div>}</BrowserRouter>;
 }
 
-function ProductShell({ children, notice }: { children: React.ReactNode; notice: Notice }) {
+function ProductShell({ children, notice, onSignOut }: { children: React.ReactNode; notice: Notice; onSignOut: () => void }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false); const [accountOpen, setAccountOpen] = useState(false);
+  const { authenticated, user, logout } = usePrivy();
   const standalone = location.pathname === "/" || location.pathname === "/sanctuary";
   const embedded = ["/forge", "/governance", "/treasury", "/council"].includes(location.pathname);
   useEffect(() => {
@@ -92,7 +96,7 @@ function ProductShell({ children, notice }: { children: React.ReactNode; notice:
     window.addEventListener("keydown", open); return () => window.removeEventListener("keydown", open);
   }, []);
   if (standalone || embedded) return <>{children}</>;
-  return <div className="product-shell"><header className="product-nav-shell"><Link className="brand-lockup" to="/sanctuary"><img className="brand-logo" src="/dreamers-dao-logo.svg" alt="Dreamers DAO"/><span><span className="eyebrow">THE DAO FOR DREAMERS</span><strong>Dreamers<span>-Dao</span></strong></span></Link><nav className="product-nav-links" aria-label="Product navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer">Explore</Link><Link className={location.pathname.startsWith("/grants") ? "active" : ""} to="/grants">Grants</Link><Link className={location.pathname.startsWith("/notifications") ? "active" : ""} to="/notifications">Signals</Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile">Profile</Link></nav><div className="product-nav-actions"><button className="search-trigger" onClick={() => setSearchOpen(true)}><SearchIcon size={15}/><span>Search network</span><kbd>⌘K</kbd></button><Link className="primary-button" to="/forge">Forge</Link></div></header><div className={`global-notice ${notice.tone}`} role="status">{notice.text}</div>{children}<nav className="mobile-product-nav" aria-label="Mobile navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer"><SearchIcon size={17}/><span>Explore</span></Link><Link className={location.pathname === "/forge" ? "active" : ""} to="/forge"><Landmark size={17}/><span>Forge</span></Link><Link className={location.pathname === "/notifications" ? "active" : ""} to="/notifications"><Sparkles size={17}/><span>Signals</span></Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile"><Users size={17}/><span>Profile</span></Link></nav>{searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} onNavigate={(path) => { setSearchOpen(false); navigate(path); }}/>}</div>;
+  return <div className="product-shell"><header className="product-nav-shell"><Link className="brand-lockup" to="/sanctuary"><img className="brand-logo" src="/dreamers-dao-logo.svg" alt="Dreamers DAO"/><span><span className="eyebrow">THE DAO FOR DREAMERS</span><strong>Dreamers<span>-Dao</span></strong></span></Link><nav className="product-nav-links" aria-label="Product navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer">Explore</Link><Link className={location.pathname.startsWith("/grants") ? "active" : ""} to="/grants">Grants</Link><Link className={location.pathname.startsWith("/notifications") ? "active" : ""} to="/notifications">Signals</Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile">Profile</Link></nav><div className="product-nav-actions"><button className="search-trigger" onClick={() => setSearchOpen(true)}><SearchIcon size={15}/><span>Search network</span><kbd>⌘K</kbd></button><Link className="primary-button" to="/forge">Forge</Link>{authenticated && <div className="account-menu"><button className="account-menu-trigger" onClick={() => setAccountOpen((open) => !open)} aria-expanded={accountOpen}>Account</button>{accountOpen && <div className="account-menu-panel"><small>{user?.email?.address || "Authenticated member"}</small><Link to="/profile" onClick={() => setAccountOpen(false)}>Profile</Link><Link to="/notifications" onClick={() => setAccountOpen(false)}>Signals</Link><button onClick={async () => { await logout(); onSignOut(); navigate("/sanctuary"); }}>Sign out</button></div>}</div>}</div></header><div className={`global-notice ${notice.tone}`} role="status">{notice.text}</div>{children}<nav className="mobile-product-nav" aria-label="Mobile navigation"><Link className={location.pathname === "/explorer" ? "active" : ""} to="/explorer"><SearchIcon size={17}/><span>Explore</span></Link><Link className={location.pathname === "/forge" ? "active" : ""} to="/forge"><Landmark size={17}/><span>Forge</span></Link><Link className={location.pathname === "/notifications" ? "active" : ""} to="/notifications"><Sparkles size={17}/><span>Signals</span></Link><Link className={location.pathname.startsWith("/profile") ? "active" : ""} to="/profile"><Users size={17}/><span>Profile</span></Link></nav>{searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} onNavigate={(path) => { setSearchOpen(false); navigate(path); }}/>}</div>;
 }
 
 function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate: (path: string) => void }) {
@@ -115,9 +119,11 @@ function OnboardingGate({ onConnect, children }: { onConnect: () => Promise<Addr
   const [walletAccount, setWalletAccount] = useState<Address | "">("");
   const [saving, setSaving] = useState(false);
   const [dismissed, setDismissed] = useState(() => window.localStorage.getItem("dearmers_profile_prompt_seen") === "1");
+  const [profileChecked, setProfileChecked] = useState(false);
   const isLanding = location.pathname === "/" || location.pathname === "/sanctuary";
-  const open = ready && !isLanding && !dismissed;
+  const open = ready && !isLanding && !dismissed && (!authenticated || profileChecked);
   const close = () => { window.localStorage.setItem("dearmers_profile_prompt_seen", "1"); setDismissed(true); };
+  useEffect(() => { if (!authenticated || !user) { const timer = window.setTimeout(() => setProfileChecked(true), 0); return () => window.clearTimeout(timer); } let cancelled = false; void (async () => { try { const token = await getAccessToken(); const response = await fetch(`/api/profile?identity=${encodeURIComponent(`privy:${user.id}`)}`, token ? { headers: { authorization: `Bearer ${token}` } } : undefined); const body = await response.json() as { profile?: { username?: string; displayName?: string } }; if (!cancelled && body.profile && (body.profile.username || body.profile.displayName)) { window.localStorage.setItem("dearmers_profile_prompt_seen", "1"); setDismissed(true); } } finally { if (!cancelled) setProfileChecked(true); } })(); return () => { cancelled = true; }; }, [authenticated, getAccessToken, user]);
   const saveProfile = async () => { if (!handle.trim()) return; try { setSaving(true); const token = await getAccessToken(); const wallet = user?.wallet?.address || walletAccount || undefined; let signature = ""; if (wallet && !token) { const client = await walletClient(); signature = await client.signMessage({ account: client.account!, message: `Dearmers-Dao\nAction: save-profile\nWallet: ${wallet.toLowerCase()}\nResource: ${handle}` }); } const response = await fetch("/api/profile", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ wallet, signature, identity: user ? `privy:${user.id}` : undefined, email: user?.email?.address || email, username: handle, displayName: handle, bio }) }); const body = await response.json() as { error?: string }; if (!response.ok) throw new Error(body.error || "Profile could not be created."); window.dispatchEvent(new Event("dearmers:profile-updated")); close(); navigate("/profile"); } catch (error) { window.alert(error instanceof Error ? error.message : "Profile could not be created."); } finally { setSaving(false); } };
   const authenticateEmail = async () => { try { if (!codeSent) { await emailLogin.sendCode({ email: email.trim() }); setCodeSent(true); } else { await emailLogin.loginWithCode({ code }); } } catch (error) { window.alert(error instanceof Error ? error.message : "Privy email authentication failed."); } };
   const currentStage = authenticated ? "profile" : stage;

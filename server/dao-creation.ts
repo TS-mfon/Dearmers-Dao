@@ -9,10 +9,19 @@ import { requirePrivyIdentity } from "./_privy.js";
 function address(value: unknown) { return String(value || "").trim() as Address; }
 const registryAbi = [{ type: "function", name: "createDAOFor", inputs: [{ name: "admin", type: "address" }, { name: "daoId", type: "bytes32" }, { name: "treasury", type: "address" }, { name: "mode", type: "uint8" }, { name: "reviewOracle", type: "address" }, { name: "executor", type: "address" }, { name: "name", type: "string" }, { name: "metadataUri", type: "string" }], outputs: [{ name: "daoAddress", type: "address" }], stateMutability: "nonpayable" }, { type: "event", name: "DAOCreated", inputs: [{ name: "daoId", type: "bytes32", indexed: true }, { name: "dao", type: "address", indexed: true }, { name: "admin", type: "address", indexed: true }, { name: "mode", type: "uint8", indexed: false }, { name: "name", type: "string", indexed: false }] }] as const;
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (!method(req, res, ["POST"])) return;
+  if (!method(req, res, ["GET", "POST"])) return;
   try {
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const db = await database();
+    if (req.method === "GET") {
+      const clientKey = String(req.query.clientKey || "");
+      const daoId = String(req.query.daoId || "");
+      if (!clientKey && !daoId) return json(res, 400, { error: "A creation key or DAO id is required." });
+      const job = await db.collection("daoCreationJobs").findOne(clientKey ? { clientKey, actor: identity.sub } : { daoId, actor: identity.sub }, { projection: { _id: 0 } });
+      if (!job) return json(res, 404, { error: "DAO creation job not found." });
+      const indexed = Boolean(job.daoAddress && await db.collection("daoIndex").findOne({ daoId: job.daoId }));
+      return json(res, 200, { ...job, indexed });
+    }
     const body = req.body || {};
     const clientKey = String(body.clientKey || "");
     const name = String(body.name || "").trim();
@@ -33,6 +42,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const account = privateKeyToAccount(privateKey as Hex);
     const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(rpc) });
     const hash = await wallet.writeContract({ address: registry, abi: registryAbi, functionName: "createDAOFor", args: [getAddress(treasury), daoId, getAddress(treasury), Number(body.mode) === 1 ? 1 : 0, getAddress(reviewOracle), getAddress(executor), name, String(body.metadataUri)] } as never);
+    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "submitted", txHash: hash, updatedAt: new Date() } });
     const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpc) });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new Error("DAO creation transaction reverted.");
@@ -42,7 +52,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const metadata = String(body.metadataUri);
     await db.collection("daoIndex").updateOne({ daoId }, { $set: { daoId, dao: daoAddress.toLowerCase(), admin: treasury.toLowerCase(), treasury: treasury.toLowerCase(), name, mode: Number(body.mode) || 0, metadata, description: String(body.description || ""), mission: String(body.mission || ""), constitution: String(body.constitution || ""), category: String(body.category || ""), access: String(body.access || "public"), gate: body.gate || null, treasuryPolicy: { weeklyUsdcLimit: String(body.weeklyLimit || "0"), executor: executor.toLowerCase() }, active: true, updatedAt: new Date() } }, { upsert: true });
     await db.collection("delegations").updateOne({ creationKey: clientKey }, { $set: { daoId, daoAddress: daoAddress.toLowerCase(), updatedAt: new Date() } });
-    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "created", daoAddress: daoAddress.toLowerCase(), txHash: hash, receiptBlock: receipt.blockNumber.toString(), createdAt: new Date(), updatedAt: new Date() } });
-    return json(res, 201, { ok: true, daoId, daoAddress: daoAddress.toLowerCase(), txHash: hash, status: "created" });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "indexed", daoAddress: daoAddress.toLowerCase(), txHash: hash, receiptBlock: receipt.blockNumber.toString(), createdAt: new Date(), updatedAt: new Date() } });
+    return json(res, 201, { ok: true, daoId, daoAddress: daoAddress.toLowerCase(), txHash: hash, status: "indexed", indexed: true });
+  } catch (error) {
+    const message = safeError(error);
+    try { const body = req.body || {}; if (body.clientKey) { const db = await database(); await db.collection("daoCreationJobs").updateOne({ clientKey: String(body.clientKey) }, { $set: { status: "failed", error: message, updatedAt: new Date() } }).catch(() => undefined); } } catch { await Promise.resolve(); }
+    return json(res, 500, { error: message });
+  }
 }
