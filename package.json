@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "automation:reconcile": "tsx scripts/reconcile.ts",
+    "deploy:genlayer-v2": "tsx scripts/deploy-genlayer-v2.ts",
+    "test:genlayer-v2": "tsx scripts/test-genlayer-v2.ts",
     "migration:media": "tsx scripts/migrate-media.ts",
     "check:api": "tsc -p tsconfig.api.json"
   },
@@ -18,7 +20,7 @@
     "@solana-program/system": "^0.14.1",
     "@solana-program/token": "^0.16.1",
     "@solana/kit": "^8.2.0",
-    "genlayer-js": "^1.1.8",
+    "genlayer-js": "^2.0.0-rc.1",
     "jose": "^6.2.11",
     "lucide-react": "^1.18.0",
     "mongodb": "^7.6.0",

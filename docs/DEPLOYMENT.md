@@ -38,6 +38,27 @@ For token-gated DAOs, replace `gateToken` and `gateBalance`. For a whitelist DAO
 
 ## GenLayer deployment
 
+### Studio Dev evaluator v2
+
+The legacy evaluator remains deployed and is not modified. Deploy the StudioNext evaluator separately:
+
+```bash
+GENLAYER_RPC_URL=https://studio-dev.genlayer.com/api \
+GENLAYER_CHAIN_ID=61997 \
+GENLAYER_OPERATOR_PRIVATE_KEY=0x... \
+npm run deploy:genlayer-v2
+```
+
+The command writes `deployment.genlayer-v2.json`. Configure the resulting address as
+`GENLAYER_V2_EVALUATOR_ADDRESS` in the server environment. The StudioNext runtime is pinned to
+`py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng`. The proposal pipeline submits a transaction first,
+returns its hash immediately, and polls finality from the proposal detail route before relaying an approved review.
+The Studio Dev explorer is `https://explorer-studio-dev.genlayer.com/`.
+
+The v2 evaluator fetches HTTPS evidence with GenLayer's nondeterministic web primitive. Fetch failures, conflicting
+sources, and unsupported claims are recorded as uncertainty; submitted text and web content cannot redefine the
+authoritative DAO or grant rules.
+
 Deploy `contracts/genlayer/dearmers_dao.py` once on Bradbury with no constructor arguments. Each DAO registers versioned constitutions through `set_constitution`.
 
 Set the resulting evaluator address in `VITE_GENLAYER_EVALUATOR` or in the app’s evaluator binding. The evaluator is intentionally DAO-scoped: each DAO must use the constitution version attached to its proposal.

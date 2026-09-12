@@ -1,11 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { chains, createClient } from "genlayer-js";
+import { TransactionHashVariant } from "genlayer-js/types";
 import { createPublicClient, createWalletClient, decodeEventLog, hashMessage, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import { method, json, safeError } from "./_http.js";
 import { database } from "./_db.js";
+import { ObjectId } from "mongodb";
 
 const statuses: Record<string, number> = { approve: 2, revision: 1, reject: 3, escalate: 6 };
 const relayAbi = [
@@ -23,30 +25,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.headers["x-internal-api-key"] !== process.env.INTERNAL_API_SECRET) return json(res, 401, { error: "Internal review relay access required." });
     const { daoId, daoAddress, proposalId, genlayerTxHash, evaluatorAddress } = req.body || {};
     if (![daoId, daoAddress, proposalId, genlayerTxHash, evaluatorAddress].every(Boolean)) return json(res, 400, { error: "Missing review relay fields." });
-    const privateKey = process.env.REVIEW_ORACLE_PRIVATE_KEY as Hex | undefined;
-    const baseRpc = process.env.BASE_RPC_URL;
     const genlayerRpc = process.env.GENLAYER_RPC_URL;
-    if (!privateKey || !baseRpc || !genlayerRpc) throw new Error("Review relay environment is incomplete");
-    const network = process.env.GENLAYER_NETWORK || "studionet";
-    const chain = network === "testnet-bradbury" ? chains.testnetBradbury : network === "testnet-asimov" ? chains.testnetAsimov : chains.studionet;
+    if (!genlayerRpc) throw new Error("GenLayer RPC is not configured.");
+    const network = process.env.GENLAYER_NETWORK || "studio-dev";
+    const chain = network === "testnet-bradbury" ? chains.testnetBradbury : network === "testnet-asimov" ? chains.testnetAsimov : network === "studio-dev" ? chains.studioDevnet : chains.studionet;
     const genlayer = createClient({ chain, endpoint: genlayerRpc });
     const receipt = await genlayer.getTransaction({ hash: genlayerTxHash as never });
     const status = String((receipt as Record<string, unknown>).statusName || (receipt as Record<string, unknown>).status || "").toUpperCase();
     if (status !== "FINALIZED") return json(res, 409, { error: `GenLayer transaction is ${status || "not finalized"}.` });
-    const raw = await genlayer.readContract({ address: evaluatorAddress as Address, functionName: "get_evaluation", args: [daoId, String(proposalId)], jsonSafeReturn: true });
+    const raw = await genlayer.readContract({ address: evaluatorAddress as Address, functionName: "get_evaluation", args: [daoId, String(proposalId)], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
     const evaluation = typeof raw === "string" ? JSON.parse(raw) : raw as Record<string, unknown>;
     if (evaluation.dao_id !== daoId || String(evaluation.proposal_id) !== String(proposalId)) return json(res, 422, { error: "Evaluation identity mismatch." });
     const baseStatus = statuses[String(evaluation.decision)];
     if (baseStatus === undefined) return json(res, 422, { error: "Unsupported GenLayer decision." });
+    const db = await database();
+    const proposalQuery = ObjectId.isValid(String(proposalId)) ? { _id: new ObjectId(String(proposalId)) } : { proposalId: String(proposalId) };
+    const offchain = await db.collection("proposals").findOne(proposalQuery);
+    if (!offchain) return json(res, 404, { error: "Offchain proposal was not found." });
+    const nextStatus = String(evaluation.decision) === "approve" ? "active_voting" : String(evaluation.decision) === "revision" ? "corrections_required" : String(evaluation.decision) === "reject" ? "rejected_by_genlayer" : "escalated";
+    if (nextStatus !== "active_voting") {
+      await db.collection("proposals").updateOne(proposalQuery, { $set: { status: nextStatus, daoAddress: String(daoAddress).toLowerCase(), evaluation, genlayerTxHash, votingEndsAt: null, updatedAt: new Date() } });
+      await db.collection("auditLogs").insertOne({ scopeId: daoId, type: `genlayer_${nextStatus}`, proposalId: String(proposalId), createdAt: new Date() });
+      return json(res, 200, { ok: true, decision: evaluation.decision, score: evaluation.score, status: nextStatus, baseTransactionHash: null });
+    }
+    const privateKey = process.env.REVIEW_ORACLE_PRIVATE_KEY as Hex | undefined;
+    const baseRpc = process.env.BASE_RPC_URL;
+    if (!privateKey || !baseRpc) throw new Error("Base review relay environment is incomplete");
     const account = privateKeyToAccount(privateKey);
     const publicClient = createPublicClient({ chain: baseSepolia, transport: http(baseRpc) });
     const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(baseRpc) });
-    const db = await database();
-    const offchain = await db.collection("proposals").findOne({ _id: proposalId as never });
-    if (!offchain) return json(res, 404, { error: "Offchain proposal was not found." });
     const proposer = String(offchain.wallet || "").toLowerCase() as Address;
     const recipient = String(offchain.recipient || proposer).toLowerCase() as Address;
-    if (!proposer || !recipient) return json(res, 422, { error: "Proposal proposer and recipient wallets are required." });
+    if (!proposer || !recipient) return json(res, 422, { error: "An approved proposal requires proposer and recipient wallets." });
     let onchainProposalId = offchain.onchainProposalId ? BigInt(String(offchain.onchainProposalId)) : null;
     if (onchainProposalId === null) {
       const registered = await (publicClient as any).readContract({ address: daoAddress as Address, abi: relayAbi, functionName: "registeredMembers", args: [proposer] }) as boolean;
@@ -66,8 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const hash = await (wallet as any).writeContract({ address: daoAddress as Address, abi: relayAbi, functionName: "recordProposalReview", args: [onchainProposalId, baseStatus, verdictHash, eligibleWeight] });
     const baseReceipt = await publicClient.waitForTransactionReceipt({ hash });
     if (baseReceipt.status !== "success") throw new Error("Base review relay reverted");
-    const nextStatus = String(evaluation.decision) === "approve" ? "active_voting" : String(evaluation.decision) === "revision" ? "corrections_required" : String(evaluation.decision) === "reject" ? "rejected_by_genlayer" : "escalated";
-    await db.collection("proposals").updateOne({ _id: proposalId as never }, { $set: { status: nextStatus, daoAddress: String(daoAddress).toLowerCase(), onchainProposalId: String(onchainProposalId), evaluation, genlayerTxHash, reviewTxHash: hash, votingEndsAt: nextStatus === "active_voting" ? new Date(Date.now() + 72 * 60 * 60 * 1000) : null, updatedAt: new Date() } });
+    await db.collection("proposals").updateOne(proposalQuery, { $set: { status: nextStatus, daoAddress: String(daoAddress).toLowerCase(), onchainProposalId: String(onchainProposalId), evaluation, genlayerTxHash, reviewTxHash: hash, votingEndsAt: new Date(Date.now() + 72 * 60 * 60 * 1000), updatedAt: new Date() } });
     await db.collection("auditLogs").insertOne({ scopeId: daoId, type: `genlayer_${nextStatus}`, proposalId: String(proposalId), createdAt: new Date() });
     json(res, 200, { ok: true, decision: evaluation.decision, score: evaluation.score, baseTransactionHash: hash });
   } catch (error) { json(res, 500, { error: safeError(error) }); }
