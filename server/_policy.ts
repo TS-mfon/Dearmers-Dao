@@ -1,5 +1,5 @@
-import type { Address } from "viem";
-import { baseClient, daoAbi } from "./_chain.js";
+import { isAddress, parseUnits, type Address } from "viem";
+import { baseClient, baseSigner, confirmed, daoAbi } from "./_chain.js";
 import { database } from "./_db.js";
 import { evaluatorAddress, genlayerClient, transactionState } from "./_genlayer.js";
 import { HttpError, safeError } from "./_http.js";
@@ -7,12 +7,28 @@ import { HttpError, safeError } from "./_http.js";
 export async function readPolicy(address: Address) {
   const client = baseClient();
   const version = await client.readContract({ address, abi: daoAbi, functionName: "activeConstitutionVersion" }) as bigint;
-  const [constitution, threshold, admin] = await Promise.all([
-    client.readContract({ address, abi: daoAbi, functionName: "getConstitution", args: [version] }),
-    client.readContract({ address, abi: daoAbi, functionName: "manualFundingThreshold" }),
+  const [constitution, admin] = await Promise.all([
+    version > 0n ? client.readContract({ address, abi: daoAbi, functionName: "getConstitution", args: [version] }) : Promise.resolve({}),
     client.readContract({ address, abi: daoAbi, functionName: "admin" }),
   ]);
-  return { version: String(version), constitution: constitution as Record<string, unknown>, threshold: String(threshold), admin: String(admin) };
+  let threshold = (2n ** 256n) - 1n;
+  try { threshold = await client.readContract({ address, abi: daoAbi, functionName: "manualFundingThreshold" }) as bigint; } catch (error) { void error; }
+  return { version: String(version), constitution: constitution as Record<string, unknown>, threshold: String(threshold), admin: String(admin), governanceConfigured: version > 0n };
+}
+
+async function repairLegacyGovernance(dao: Record<string, unknown>, address: Address) {
+  const admin = String(await baseClient().readContract({ address, abi: daoAbi, functionName: "admin" })).toLowerCase();
+  const signer = baseSigner(process.env.BASE_PLATFORM_SIGNER_PRIVATE_KEY ? "BASE_PLATFORM_SIGNER_PRIVATE_KEY" : "BASE_AUTOMATION_PRIVATE_KEY");
+  if (admin !== signer.account.address.toLowerCase()) throw new HttpError(409, "This DAO has no active constitution and its onchain administrator is not the configured platform signer. The DAO owner must initialize governance from the DAO wallet.");
+  const gate = (dao.gate && typeof dao.gate === "object" ? dao.gate : {}) as Record<string, unknown>;
+  const gateToken = isAddress(String(gate.asset || "")) ? String(gate.asset) : "0x0000000000000000000000000000000000000000";
+  const weeklyLimit = parseUnits(String((dao.treasuryPolicy as Record<string, unknown> | undefined)?.weeklyUsdcLimit || "1000"), 6);
+  const policy = { version: 0n, activatesAt: 0, votingPeriod: 259200, maxProposalAmount: 250000000n, weeklySpendLimit: weeklyLimit, quorumBps: 2000, approvalBps: 5000, participationWeightCap: 10, tokenWeightCap: 10, gateToken, gateBalance: gateToken === "0x0000000000000000000000000000000000000000" ? 0n : 1n, tokenWeightUnit: 0n, categories: String(dao.category || "general"), policyText: String(dao.pendingConstitution || dao.constitution || ""), active: false };
+  if (!policy.policyText) throw new HttpError(409, "This DAO has no constitution text to initialize governance.");
+  const scheduled = await signer.writeContract({ address, abi: daoAbi, functionName: "scheduleConstitution", args: [policy] });
+  await confirmed(scheduled);
+  const version = await baseClient().readContract({ address, abi: daoAbi, functionName: "activeConstitutionVersion" }) as bigint;
+  await confirmed(await signer.writeContract({ address, abi: daoAbi, functionName: "activateConstitution", args: [version + 1n] }));
 }
 
 export async function syncDaoPolicy(daoId: string) {
@@ -22,8 +38,11 @@ export async function syncDaoPolicy(daoId: string) {
   const lease = await db.collection("daoIndex").findOneAndUpdate({ daoId, $or: [{ policyLeaseUntil: { $exists: false } }, { policyLeaseUntil: { $lt: new Date() } }] }, { $set: { policyLeaseUntil: new Date(Date.now() + 120_000) } }, { returnDocument: "after" });
   if (!lease) return;
   try {
-    const state = await readPolicy(dao.dao as Address);
-    if (state.version === "0") throw new HttpError(409, "The DAO needs an active onchain constitution first.");
+    let state = await readPolicy(dao.dao as Address);
+    if (state.version === "0") {
+      await repairLegacyGovernance(dao, dao.dao as Address);
+      state = await readPolicy(dao.dao as Address);
+    }
     let hash = dao.policyTxVersion === state.version ? dao.policyTxHash : undefined;
     const policyText = String(state.constitution.policyText || "");
     if (dao.rulesVersion === state.version && dao.policySyncStatus === "ready" && dao.constitution === policyText && !dao.pendingMission) return;

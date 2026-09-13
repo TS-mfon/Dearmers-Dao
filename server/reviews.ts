@@ -22,7 +22,9 @@ export async function relayReview(proposal: Document, job: Document, evaluation:
   if (!isAddress(String(proposal.wallet || "")) || !isAddress(address)) throw new HttpError(409, "A verified proposer wallet and DAO address are required before voting can open.");
   const wallet = baseSigner("REVIEW_ORACLE_PRIVATE_KEY");
   const key = hashMessage(`${proposal.daoId}:${proposalId}`);
-  let storedId = await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalIdsByKey", args: [key] }) as bigint;
+  let supportsIdempotentKeys = true;
+  let storedId = 0n;
+  try { storedId = await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalIdsByKey", args: [key] }) as bigint; } catch { supportsIdempotentKeys = false; }
   if (storedId === 0n) {
     if (!job.createTxHash) {
       const registered = await baseClient().readContract({ address, abi: daoAbi, functionName: "registeredMembers", args: [proposal.wallet] });
@@ -34,15 +36,19 @@ export async function relayReview(proposal: Document, job: Document, evaluation:
         await setJob({ memberTxHash: memberHash });
         await confirmed(memberHash as Hex);
       }
-      const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "createProposalForKey", args: [key, proposal.wallet, proposal.recipient || proposal.wallet, BigInt(String(proposal.amountAtomic || "0")), proposal.kind === "non_spend" ? 3 : 0, proposal.title, proposal.description, proposal.category || "general", String(proposal.evidence?.[0] || ""), hashMessage(JSON.stringify(proposal.evidence || []))] });
+      const proposalCount = supportsIdempotentKeys ? 0n : await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalCount" }) as bigint;
+      const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: supportsIdempotentKeys ? "createProposalForKey" : "createProposalFor", args: supportsIdempotentKeys ? [key, proposal.wallet, proposal.recipient || proposal.wallet, BigInt(String(proposal.amountAtomic || "0")), proposal.kind === "non_spend" ? 3 : 0, proposal.title, proposal.description, proposal.category || "general", String(proposal.evidence?.[0] || ""), hashMessage(JSON.stringify(proposal.evidence || []))] : [proposal.wallet, proposal.recipient || proposal.wallet, BigInt(String(proposal.amountAtomic || "0")), proposal.kind === "non_spend" ? 2 : 0, proposal.title, proposal.description, proposal.category || "general", String(proposal.evidence?.[0] || ""), hashMessage(JSON.stringify(proposal.evidence || []))] });
       job.createTxHash = hash;
-      await setJob({ createTxHash: hash });
+      job.legacyProposalId = supportsIdempotentKeys ? undefined : String(proposalCount);
+      await setJob({ createTxHash: hash, legacyProposalId: job.legacyProposalId });
     }
     await confirmed(job.createTxHash as Hex);
-    storedId = await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalIdsByKey", args: [key] }) as bigint;
-    if (storedId === 0n) throw new HttpError(409, "Onchain proposal creation is not yet confirmed.");
+    if (supportsIdempotentKeys) {
+      storedId = await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalIdsByKey", args: [key] }) as bigint;
+      if (storedId === 0n) throw new HttpError(409, "Onchain proposal creation is not yet confirmed.");
+    } else if (job.legacyProposalId === undefined) throw new HttpError(409, "Legacy proposal creation is not yet confirmed.");
   }
-  const onchainId = storedId - 1n;
+  const onchainId = supportsIdempotentKeys ? storedId - 1n : BigInt(String(job.legacyProposalId));
   await db.collection("proposals").updateOne(query, { $set: { onchainProposalId: String(onchainId), daoAddress: address } });
   let state = await chainProposal(address, onchainId);
   if (state.status === 0 || state.status === 1) {
