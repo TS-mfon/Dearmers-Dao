@@ -40,7 +40,7 @@ export async function reconcileReview(proposalId: string, start = false, recover
       if (dao.policySyncStatus !== "ready") {
         await syncDaoPolicy(proposal.daoId);
         const synchronizedDao = await db.collection("daoIndex").findOne({ daoId: proposal.daoId, banned: { $ne: true } });
-        if (synchronizedDao?.policySyncStatus !== "ready") throw new HttpError(409, "The platform is synchronizing this DAO's constitution with GenLayer. Check status again shortly.");
+        if (synchronizedDao?.policySyncStatus !== "ready") throw new HttpError(409, String(synchronizedDao?.policyError || "The platform is synchronizing this DAO's constitution with GenLayer. Check status again shortly."));
         Object.assign(dao, synchronizedDao);
       }
       await update({ status: "submitting", evaluatorAddress: address, error: "" });

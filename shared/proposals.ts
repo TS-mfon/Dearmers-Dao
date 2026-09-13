@@ -18,6 +18,8 @@ export function reviewCapabilities(status: string, job: ReviewJob | null, author
 }
 
 export function reviewLabel(status: string, job: ReviewJob | null) {
+  if (!job?.genlayerTxHash && job?.error?.includes("Base constitution")) return "Base governance setup pending";
+  if (!job?.genlayerTxHash && job?.error?.includes("GenLayer")) return "GenLayer policy synchronization pending";
   if (job?.status === "submission_unknown" || job?.status === "broadcasting") return "Confirming submission";
   if (job?.status === "transaction_failed") return "Review transaction failed";
   if (job?.status === "relay_failed" || status === "approved_for_voting") return "Consensus reached · completing voting setup";
