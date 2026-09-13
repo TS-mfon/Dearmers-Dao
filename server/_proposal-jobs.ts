@@ -5,6 +5,7 @@ import { evaluatorAddress, finalizedEvaluation, genlayerClient, transactionState
 import { HttpError, safeError } from "./_http.js";
 import { relayReview } from "./reviews.js";
 import { reviewPending } from "../shared/proposals.js";
+import { syncDaoPolicy } from "./_policy.js";
 
 export async function reconcileReview(proposalId: string, start = false, recoveryHash = "") {
   if (!ObjectId.isValid(proposalId)) throw new HttpError(400, "A valid proposal id is required.");
@@ -36,7 +37,12 @@ export async function reconcileReview(proposalId: string, start = false, recover
         return;
       }
       if (!start) return;
-      if (dao.policySyncStatus !== "ready") throw new HttpError(409, "DAO governance setup or policy synchronization is incomplete. The DAO admin must finish setup first.");
+      if (dao.policySyncStatus !== "ready") {
+        await syncDaoPolicy(proposal.daoId);
+        const synchronizedDao = await db.collection("daoIndex").findOne({ daoId: proposal.daoId, banned: { $ne: true } });
+        if (synchronizedDao?.policySyncStatus !== "ready") throw new HttpError(409, "The platform is synchronizing this DAO's constitution with GenLayer. Check status again shortly.");
+        Object.assign(dao, synchronizedDao);
+      }
       await update({ status: "submitting", evaluatorAddress: address, error: "" });
       const client = genlayerClient(true);
       const args = [proposal.daoId, proposalId, JSON.stringify({ title: proposal.title, description: proposal.description, amount: proposal.amount, recipient: proposal.recipient, category: proposal.category, evidence: proposal.evidence || [], mission: proposal.missionSnapshot || dao.mission, constitution: proposal.constitutionSnapshot || dao.constitution })];
