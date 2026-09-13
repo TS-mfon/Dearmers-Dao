@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useLogin, usePrivy } from "@privy-io/react-auth";
 import { Link, NavLink, Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import { formatUnits, type Address, type Abi } from "viem";
 import { useSessionHeaders } from "../lib/session";
@@ -23,6 +24,26 @@ function useDaoAdmin(view: string) {
   return { daoId, headers, data, error, loading, load, request };
 }
 function Gate({ loading, error }: { loading: boolean; error: string }) { return <p className={error ? "notice error" : "empty"} role={error ? "alert" : "status"}>{error || (loading ? "Loading DAO controls…" : "DAO controls unavailable.")}</p>; }
+function WalletAccessGate({ children }: { children: React.ReactNode }) {
+  const { ready, authenticated, user, linkWallet } = usePrivy();
+  const { login } = useLogin();
+  const [connecting, setConnecting] = useState(false);
+  const linkedWallet = user?.linkedAccounts.find((account) => account.type === "wallet" && account.chainType === "ethereum");
+  const wallet = (linkedWallet && "address" in linkedWallet ? linkedWallet.address : "") || user?.wallet?.address || "";
+  const connect = () => {
+    setConnecting(true);
+    if (!authenticated) {
+      login({ loginMethods: ["wallet"] });
+      window.setTimeout(() => setConnecting(false), 600);
+      return;
+    }
+    linkWallet();
+    window.setTimeout(() => setConnecting(false), 600);
+  };
+  if (!ready) return <main className="admin-access-state"><p className="empty" role="status">Waking wallet access…</p></main>;
+  if (!authenticated || !wallet) return <main className="admin-access-state"><section className="admin-access-card"><span className="eyebrow">DAO ADMINISTRATION / WALLET REQUIRED</span><h1>Connect the wallet<br /><em>that stewards this DAO.</em></h1><p>DAO control-room access is tied to the administrator wallet. Connect it with Privy, then we’ll verify that it owns this covenant before showing treasury and governance controls.</p><button className="primary-button" onClick={connect} disabled={connecting}>{connecting ? "Opening wallet…" : authenticated ? "Link admin wallet" : "Connect admin wallet"}</button><small>Use the wallet that appears as the DAO administrator on Base.</small></section></main>;
+  return <>{children}</>;
+}
 function Layout() { const { daoId } = useParams(); return <div className="admin-route dao-admin-route"><aside className="admin-sidebar"><Link className="back-link" to={`/dao/${daoId}`}>← Back to DAO</Link><span className="eyebrow">DAO ADMINISTRATION</span><h1>Steward this<br /><em>covenant.</em></h1><nav aria-label="DAO administration">{["identity", "proposals", "members", "settings", "history"].map((name) => <NavLink key={name} to={`/dao/${daoId}/control-room/${name}`}>{name[0].toUpperCase() + name.slice(1)}</NavLink>)}</nav></aside><main className="admin-route-main"><Outlet /></main></div>; }
 function Identity({ onNotice }: { onNotice: (notice: Notice) => void }) {
   const { data, loading, error, daoId, headers, request, load } = useDaoAdmin("identity"); const [busy, setBusy] = useState("");
@@ -90,4 +111,4 @@ function Settings({ onNotice }: { onNotice: (notice: Notice) => void }) {
 }
 function History() { const { data, loading, error } = useDaoAdmin("history"); if (!data) return <Gate loading={loading} error={error} />; return <><h2>DAO audit history</h2>{!data.events?.length && <p className="empty">No DAO actions recorded.</p>}{data.events?.map((event) => <article className="admin-log-row" key={event._id}><strong>{event.type.replaceAll("_", " ")}</strong><time>{new Date(event.createdAt).toLocaleString()}</time></article>)}</>; }
 
-export function DaoAdminRoute({ onNotice }: { onNotice: (notice: Notice) => void }) { return <Routes><Route element={<Layout />}><Route index element={<Navigate to="identity" replace />} /><Route path="identity" element={<Identity onNotice={onNotice} />} /><Route path="proposals" element={<ProposalQueue onNotice={onNotice} />} /><Route path="members" element={<Members onNotice={onNotice} />} /><Route path="settings" element={<Settings onNotice={onNotice} />} /><Route path="history" element={<History />} /><Route path="*" element={<Navigate to="identity" replace />} /></Route></Routes>; }
+export function DaoAdminRoute({ onNotice }: { onNotice: (notice: Notice) => void }) { return <WalletAccessGate><Routes><Route element={<Layout />}><Route index element={<Navigate to="identity" replace />} /><Route path="identity" element={<Identity onNotice={onNotice} />} /><Route path="proposals" element={<ProposalQueue onNotice={onNotice} />} /><Route path="members" element={<Members onNotice={onNotice} />} /><Route path="settings" element={<Settings onNotice={onNotice} />} /><Route path="history" element={<History />} /><Route path="*" element={<Navigate to="identity" replace />} /></Route></Routes></WalletAccessGate>; }
