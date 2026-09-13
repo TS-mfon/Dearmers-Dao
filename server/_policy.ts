@@ -23,7 +23,8 @@ async function repairLegacyGovernance(dao: Record<string, unknown>, address: Add
   const gate = (dao.gate && typeof dao.gate === "object" ? dao.gate : {}) as Record<string, unknown>;
   const gateToken = isAddress(String(gate.asset || "")) ? String(gate.asset) : "0x0000000000000000000000000000000000000000";
   const weeklyLimit = parseUnits(String((dao.treasuryPolicy as Record<string, unknown> | undefined)?.weeklyUsdcLimit || "1000"), 6);
-  const policy = { version: 0n, activatesAt: 0, votingPeriod: 259200, maxProposalAmount: 250000000n, weeklySpendLimit: weeklyLimit, quorumBps: 2000, approvalBps: 5000, participationWeightCap: 10, tokenWeightCap: 10, gateToken, gateBalance: gateToken === "0x0000000000000000000000000000000000000000" ? 0n : 1n, tokenWeightUnit: 0n, categories: String(dao.category || "general"), policyText: String(dao.pendingConstitution || dao.constitution || ""), active: false };
+  const latestBlock = await baseClient().getBlock();
+  const policy = { version: 0n, activatesAt: latestBlock.timestamp, votingPeriod: 259200, maxProposalAmount: 250000000n, weeklySpendLimit: weeklyLimit, quorumBps: 2000, approvalBps: 5000, participationWeightCap: 10, tokenWeightCap: 10, gateToken, gateBalance: gateToken === "0x0000000000000000000000000000000000000000" ? 0n : 1n, tokenWeightUnit: 0n, categories: String(dao.category || "general"), policyText: String(dao.pendingConstitution || dao.constitution || ""), active: false };
   if (!policy.policyText) throw new HttpError(409, "This DAO has no constitution text to initialize governance.");
   const scheduled = await signer.writeContract({ address, abi: daoAbi, functionName: "scheduleConstitution", args: [policy] });
   await confirmed(scheduled);
