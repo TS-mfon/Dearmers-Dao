@@ -4,6 +4,8 @@ import { PrivyProvider } from '@privy-io/react-auth'
 import './index.css'
 import './App.css'
 import App from './App.tsx'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { ProtocolAdminRoutes } from './pages/AdminRoutes'
 
 class AppBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -14,9 +16,9 @@ class AppBoundary extends Component<{ children: ReactNode }, { error: Error | nu
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AppBoundary>
-      <PrivyProvider appId={import.meta.env.VITE_PRIVY_APP_ID || ''} config={{ appearance: { theme: 'dark', accentColor: '#b7ff3c' } }}>
+      {window.location.pathname.startsWith('/control-room') ? <BrowserRouter><Routes><Route path="/control-room/*" element={<ProtocolAdminRoutes />} /></Routes></BrowserRouter> : <PrivyProvider appId={import.meta.env.VITE_PRIVY_APP_ID || ''} config={{ appearance: { theme: 'dark', accentColor: '#b7ff3c' } }}>
         <App />
-      </PrivyProvider>
+      </PrivyProvider>}
     </AppBoundary>
   </StrictMode>,
 )

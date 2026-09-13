@@ -4,6 +4,7 @@ import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
 import { verifyWallet } from "./_auth.js";
 import { ObjectId } from "mongodb";
+import { baseClient, registryAbi } from "./_chain.js";
 async function resolveDaoMedia(db: Awaited<ReturnType<typeof database>>, dao: Record<string, unknown>) {
   const daoId = String(dao.daoId || "");
   const mediaIds = { logo: String(dao.logoMediaId || ""), banner: String(dao.bannerMediaId || "") };
@@ -34,6 +35,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { wallet, signature, daoId, dao, admin, name, mode, metadata, description, category } = req.body || {};
     if (!wallet || !signature || !daoId || !dao || !name || !await verifyWallet("index-dao", wallet as Address, String(daoId), signature as Hex)) return json(res, 401, { error: "Valid admin authorization required." });
     if (String(wallet).toLowerCase() !== String(admin).toLowerCase()) return json(res, 403, { error: "Only the bound DAO admin can index this covenant." });
+    const record = await baseClient().readContract({ address: process.env.DEARMERS_REGISTRY_ADDRESS as Address, abi: registryAbi, functionName: "getDAO", args: [daoId] }) as { admin: Address; dao: Address; name: string; metadataUri: string };
+    if (record.admin.toLowerCase() !== String(wallet).toLowerCase() || record.dao.toLowerCase() !== String(dao).toLowerCase() || record.name !== name || record.metadataUri !== metadata) return json(res, 403, { error: "DAO indexing must match the authoritative registry record." });
     await db.collection("daoIndex").updateOne({ daoId: String(daoId) }, { $set: { daoId: String(daoId), dao: String(dao), admin: String(admin).toLowerCase(), name: String(name), mode: Number(mode) || 0, metadata, bannerUri: "", logoUri: "", description: description || "", category: category || "", active: true, updatedAt: new Date() } }, { upsert: true });
     return json(res, 200, { ok: true });
   } catch (error) { return json(res, 500, { error: safeError(error) }); }

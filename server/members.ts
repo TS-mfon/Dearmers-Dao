@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
 import { method, json, safeError } from "./_http.js";
-import { requirePrivyIdentity } from "./_privy.js";
+import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { ObjectId } from "mongodb";
 
@@ -12,9 +12,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const daoId = String(req.query.daoId || req.body?.daoId || "");
     if (!daoId) return json(res, 400, { error: "DAO id is required." });
     if (req.method === "GET") {
+      const identity = await bearerIdentity(req.headers.authorization);
+      const admin = identity ? await findDaoForIdentity(db, daoId, identity) : null;
       const [members, applications] = await Promise.all([
         db.collection("daoMembers").find({ daoId, status: "active" }).sort({ joinedAt: 1 }).limit(500).toArray(),
-        db.collection("membershipApplications").find({ daoId, status: "pending" }).sort({ createdAt: 1 }).limit(500).toArray(),
+        admin ? db.collection("membershipApplications").find({ daoId, status: "pending" }).sort({ createdAt: 1 }).limit(500).toArray() : Promise.resolve([]),
       ]);
       return json(res, 200, { members, applications });
     }
@@ -24,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const applicationId = String(req.body?.applicationId || "");
     const decision = String(req.body?.decision || "");
     if (!applicationId || !["approve", "reject"].includes(decision)) return json(res, 400, { error: "Application and decision are required." });
-    const application = ObjectId.isValid(applicationId) ? await db.collection("membershipApplications").findOne({ _id: new ObjectId(applicationId), daoId }) : null;
+    const application = ObjectId.isValid(applicationId) ? await db.collection("membershipApplications").findOne({ _id: new ObjectId(applicationId), daoId, status: "pending" }) : null;
     if (!application) return json(res, 404, { error: "Membership application not found." });
     const status = decision === "approve" ? "approved" : "rejected";
     await db.collection("membershipApplications").updateOne({ _id: application._id }, { $set: { status, decidedBy: identity.sub, decidedAt: new Date() } });

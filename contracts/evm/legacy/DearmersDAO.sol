@@ -8,8 +8,8 @@ interface IERC20Balance {
 contract DearmersDAO {
     enum DaoMode { Operating, Grant }
     enum MembershipMode { Public, Whitelist, TokenGated }
-    enum ProposalKind { Spend, Grant, Emergency, NonSpend }
-    enum ProposalStatus { PendingReview, RevisionRequired, Voting, Rejected, Approved, Executed, Escalated, Paused, Tied, ManualFunding, ExecutionReserved, Adopted }
+    enum ProposalKind { Spend, Grant, Emergency }
+    enum ProposalStatus { PendingReview, RevisionRequired, Voting, Rejected, Approved, Executed, Escalated, Paused, Tied, ManualFunding }
     enum ApplicationStatus { Submitted, RevisionRequired, Eligible, Rejected, Voting, Selected, NotSelected, Active, Completed, Cancelled }
     enum MilestoneStatus { Pending, Submitted, RevisionRequired, Approved, Paid, Rejected }
 
@@ -103,9 +103,9 @@ contract DearmersDAO {
     error TreasuryPaused();
     error SpendingLimitExceeded();
 
-    address public registry;
-    bytes32 public daoId;
-    DaoMode public mode;
+    address public immutable registry;
+    bytes32 public immutable daoId;
+    DaoMode public immutable mode;
     address public admin;
     address public treasury;
     address public reviewOracle;
@@ -121,11 +121,6 @@ contract DearmersDAO {
     uint256 public totalConfiguredWeight;
     uint256 public spentThisPeriod;
     uint64 public spendingPeriodStartedAt;
-    uint256 public manualFundingThreshold = type(uint256).max;
-    mapping(bytes32 => uint256) public proposalIdsByKey;
-    mapping(uint256 => bytes32) public executionKeys;
-    mapping(uint256 => uint256) public reservationAmounts;
-    mapping(bytes32 => bool) public usedExecutionHashes;
 
     mapping(uint256 => Constitution) private constitutions;
     mapping(uint256 => Proposal) private proposals;
@@ -167,7 +162,6 @@ contract DearmersDAO {
     event RolesUpdated(address reviewOracle, address executor);
     event VoteRelayerChanged(address indexed relayer, bool allowed);
     event ProposalRelayerChanged(address indexed relayer, bool allowed);
-    event ExecutionReserved(uint256 indexed proposalId, bytes32 indexed executionKey, uint256 amount);
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert Unauthorized();
@@ -198,15 +192,6 @@ contract DearmersDAO {
         address executor_,
         address registry_
     ) {
-        _initializeDAO(admin_, daoId_, mode_, treasury_, reviewOracle_, executor_, registry_);
-    }
-
-    function initializeDAO(address admin_, bytes32 daoId_, DaoMode mode_, address treasury_, address reviewOracle_, address executor_, address registry_) external {
-        if (admin != address(0) || msg.sender != registry_) revert Unauthorized();
-        _initializeDAO(admin_, daoId_, mode_, treasury_, reviewOracle_, executor_, registry_);
-    }
-
-    function _initializeDAO(address admin_, bytes32 daoId_, DaoMode mode_, address treasury_, address reviewOracle_, address executor_, address registry_) internal {
         if (admin_ == address(0) || treasury_ == address(0) || reviewOracle_ == address(0) || executor_ == address(0) || registry_ == address(0) || daoId_ == bytes32(0)) revert InvalidInput();
         admin = admin_;
         daoId = daoId_;
@@ -216,7 +201,6 @@ contract DearmersDAO {
         executor = executor_;
         voteRelayers[executor_] = true;
         proposalRelayers[executor_] = true;
-        proposalRelayers[reviewOracle_] = true;
         registry = registry_;
         spendingPeriodStartedAt = uint64(block.timestamp);
         whitelist[admin_] = true;
@@ -224,7 +208,6 @@ contract DearmersDAO {
         configuredWeight[admin_] = 1;
         memberCount = 1;
         totalConfiguredWeight = 1;
-        manualFundingThreshold = type(uint256).max;
     }
 
     function setRoles(address reviewOracle_, address executor_) external onlyAdmin {
@@ -279,45 +262,6 @@ contract DearmersDAO {
         _registerMember(account);
     }
 
-    function syncMemberFor(address account, bool allowed) external {
-        if (!proposalRelayers[msg.sender] && !voteRelayers[msg.sender]) revert Unauthorized();
-        if (account == address(0)) revert InvalidInput();
-        if (membershipMode == MembershipMode.TokenGated && allowed && !_meetsTokenGate(account, activeConstitutionVersion)) revert NotMember();
-        uint256 previous = configuredWeight[account];
-        whitelist[account] = allowed;
-        if (allowed && !registeredMembers[account]) memberCount++;
-        if (!allowed && registeredMembers[account]) memberCount--;
-        registeredMembers[account] = allowed;
-        configuredWeight[account] = allowed ? 1 : 0;
-        totalConfiguredWeight = totalConfiguredWeight - previous + configuredWeight[account];
-    }
-
-    function initializeGovernance(Constitution calldata initialPolicy, MembershipMode access, address voteRelayer, uint256 threshold) external {
-        if (msg.sender != registry || activeConstitutionVersion != 0) revert Unauthorized();
-        if (voteRelayer == address(0) || bytes(initialPolicy.policyText).length == 0) revert InvalidInput();
-        Constitution memory policy = initialPolicy;
-        policy.version = 1;
-        policy.activatesAt = uint64(block.timestamp);
-        policy.votingPeriod = 3 days;
-        policy.active = true;
-        if (policy.quorumBps > 10_000 || policy.approvalBps > 10_000) revert InvalidInput();
-        constitutions[1] = policy;
-        activeConstitutionVersion = 1;
-        membershipMode = access;
-        voteRelayers[voteRelayer] = true;
-        manualFundingThreshold = threshold;
-        emit ConstitutionActivated(1);
-    }
-
-    function configurePolicy(Constitution calldata nextPolicy, uint256 threshold) external onlyAdmin {
-        Constitution memory policy = nextPolicy;
-        policy.activatesAt = uint64(block.timestamp);
-        policy.votingPeriod = 3 days;
-        uint256 version = scheduleConstitution(policy);
-        activateConstitution(version);
-        manualFundingThreshold = threshold;
-    }
-
     function _registerMember(address account) internal {
         if (registeredMembers[account]) return;
         if (membershipMode == MembershipMode.Whitelist && !whitelist[account]) revert NotMember();
@@ -329,7 +273,7 @@ contract DearmersDAO {
         emit MemberRegistered(account);
     }
 
-    function scheduleConstitution(Constitution memory constitution) public onlyAdmin returns (uint256 version) {
+    function scheduleConstitution(Constitution calldata constitution) external onlyAdmin returns (uint256 version) {
         if (constitution.votingPeriod == 0 || constitution.quorumBps > 10_000 || constitution.approvalBps > 10_000 || constitution.activatesAt < block.timestamp) revert InvalidInput();
         version = activeConstitutionVersion + 1;
         Constitution storage stored = constitutions[version];
@@ -350,7 +294,7 @@ contract DearmersDAO {
         emit ConstitutionScheduled(version, constitution.activatesAt);
     }
 
-    function activateConstitution(uint256 version) public {
+    function activateConstitution(uint256 version) external {
         Constitution storage constitution = constitutions[version];
         if (constitution.version != version || block.timestamp < constitution.activatesAt) revert InvalidState();
         if (activeConstitutionVersion != 0) constitutions[activeConstitutionVersion].active = false;
@@ -387,14 +331,6 @@ contract DearmersDAO {
         return _createProposal(proposer, recipient, amount, kind, title, description, category, evidenceUri, evidenceHash);
     }
 
-    function createProposalForKey(bytes32 key, address proposer, address recipient, uint256 amount, ProposalKind kind, string calldata title, string calldata description, string calldata category, string calldata evidenceUri, bytes32 evidenceHash) external returns (uint256 proposalId) {
-        if (!proposalRelayers[msg.sender]) revert Unauthorized();
-        if (key == bytes32(0)) revert InvalidInput();
-        if (proposalIdsByKey[key] != 0) return proposalIdsByKey[key] - 1;
-        proposalId = _createProposal(proposer, recipient, amount, kind, title, description, category, evidenceUri, evidenceHash);
-        proposalIdsByKey[key] = proposalId + 1;
-    }
-
     function _createProposal(
         address proposer,
         address recipient,
@@ -409,10 +345,7 @@ contract DearmersDAO {
         if (emergencyPaused) revert TreasuryPaused();
         _requireMember(proposer);
         Constitution storage constitution = constitutions[activeConstitutionVersion];
-        if (!constitution.active || bytes(title).length == 0) revert InvalidInput();
-        if (kind == ProposalKind.NonSpend) {
-            if (amount != 0) revert InvalidInput();
-        } else if (recipient == address(0) || amount == 0 || amount > constitution.maxProposalAmount) revert InvalidInput();
+        if (!constitution.active || recipient == address(0) || amount == 0 || amount > constitution.maxProposalAmount || bytes(title).length == 0) revert InvalidInput();
         proposalId = proposalCount++;
         Proposal storage proposal = proposals[proposalId];
         proposal.proposer = proposer;
@@ -427,7 +360,7 @@ contract DearmersDAO {
         proposal.description = description;
         proposal.category = category;
         proposal.evidenceUri = evidenceUri;
-        emit ProposalCreated(proposalId, kind, proposer, recipient, amount);
+        emit ProposalCreated(proposalId, kind, msg.sender, recipient, amount);
     }
 
     function recordProposalReview(uint256 proposalId, ProposalStatus status, bytes32 verdictHash, uint256 eligibleWeightSnapshot) external onlyReviewOracle {
@@ -476,14 +409,14 @@ contract DearmersDAO {
         bool quorumReached = proposal.eligibleWeightSnapshot > 0 && totalVotes * 10_000 >= proposal.eligibleWeightSnapshot * constitution.quorumBps;
         bool tied = totalVotes > 0 && quorumReached && proposal.yesWeight == proposal.noWeight;
         bool approved = totalVotes > 0 && quorumReached && proposal.yesWeight > proposal.noWeight && proposal.yesWeight * 10_000 >= totalVotes * constitution.approvalBps;
-        proposal.status = tied ? ProposalStatus.Tied : (approved ? (proposal.kind == ProposalKind.NonSpend ? ProposalStatus.Adopted : ProposalStatus.Approved) : ProposalStatus.Rejected);
+        proposal.status = tied ? ProposalStatus.Tied : (approved ? ProposalStatus.Approved : ProposalStatus.Rejected);
         emit ProposalFinalized(proposalId, proposal.status);
     }
 
     function resolveTiedProposal(uint256 proposalId, bool support) external onlyAdmin {
         Proposal storage proposal = proposals[proposalId];
         if (proposal.status != ProposalStatus.Tied) revert InvalidState();
-        proposal.status = support ? (proposal.kind == ProposalKind.NonSpend ? ProposalStatus.Adopted : ProposalStatus.Approved) : ProposalStatus.Rejected;
+        proposal.status = support ? ProposalStatus.Approved : ProposalStatus.Rejected;
         emit ProposalTieResolved(proposalId, support, msg.sender);
         emit ProposalFinalized(proposalId, proposal.status);
     }
@@ -497,42 +430,10 @@ contract DearmersDAO {
 
     function recordProposalExecution(uint256 proposalId, bytes32 executionHash) external onlyExecutor {
         Proposal storage proposal = proposals[proposalId];
-        if (proposal.status != ProposalStatus.ExecutionReserved || executionHash == bytes32(0) || usedExecutionHashes[executionHash]) revert InvalidState();
-        usedExecutionHashes[executionHash] = true;
+        if (proposal.status != ProposalStatus.Approved || executionHash == bytes32(0)) revert InvalidState();
+        _consumeSpendingLimit(proposal.amount, proposal.constitutionVersion);
         proposal.status = ProposalStatus.Executed;
         proposal.executionHash = executionHash;
-        emit ExecutionRecorded(proposalId, executionHash, proposal.amount);
-    }
-
-    function reserveProposalExecution(uint256 proposalId, bytes32 executionKey, uint256 fee) external onlyExecutor returns (bool) {
-        Proposal storage proposal = proposals[proposalId];
-        if (proposal.status == ProposalStatus.ExecutionReserved && executionKeys[proposalId] == executionKey && reservationAmounts[proposalId] == proposal.amount + fee) return true;
-        if (emergencyPaused) revert TreasuryPaused();
-        if (mode == DaoMode.Grant || proposal.kind != ProposalKind.Spend || proposal.status != ProposalStatus.Approved || executionKey == bytes32(0)) revert InvalidState();
-        if (block.timestamp >= spendingPeriodStartedAt + 7 days) {
-            spendingPeriodStartedAt = uint64(block.timestamp);
-            spentThisPeriod = 0;
-        }
-        uint256 required = proposal.amount + fee;
-        if (proposal.amount > manualFundingThreshold || spentThisPeriod + required > constitutions[activeConstitutionVersion].weeklySpendLimit) {
-            proposal.status = ProposalStatus.ManualFunding;
-            emit ManualFundingRequired(proposalId, msg.sender);
-            return false;
-        }
-        spentThisPeriod += required;
-        executionKeys[proposalId] = executionKey;
-        reservationAmounts[proposalId] = required;
-        proposal.status = ProposalStatus.ExecutionReserved;
-        emit ExecutionReserved(proposalId, executionKey, required);
-        return true;
-    }
-
-    function recordManualFunding(uint256 proposalId, bytes32 executionHash) external onlyAdmin {
-        Proposal storage proposal = proposals[proposalId];
-        if (proposal.status != ProposalStatus.ManualFunding || proposal.kind != ProposalKind.Spend || executionHash == bytes32(0) || usedExecutionHashes[executionHash]) revert InvalidState();
-        usedExecutionHashes[executionHash] = true;
-        proposal.executionHash = executionHash;
-        proposal.status = ProposalStatus.Executed;
         emit ExecutionRecorded(proposalId, executionHash, proposal.amount);
     }
 

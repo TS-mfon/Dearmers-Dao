@@ -1,89 +1,71 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
-import { requirePrivyIdentity } from "./_privy.js";
+import { HttpError, errorResponse, method, json, safeError } from "./_http.js";
+import { requireAdminSession, digest } from "./_admin-session.js";
 import { escapeHtml, sendEmail } from "./_email.js";
-import { ObjectId } from "mongodb";
-import { verifyWallet } from "./_auth.js";
-
-const admins = () => new Set((process.env.ADMIN_WALLETS || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
-async function isAdmin(db: Awaited<ReturnType<typeof database>>, identity: { sub: string; wallet?: string }, wallet: string) {
-  const candidate = String(wallet || identity.wallet || "").toLowerCase();
-  return Boolean(candidate && admins().has(candidate));
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
+  res.setHeader("Cache-Control", "no-store");
   try {
-    const identity = await requirePrivyIdentity(req.headers.authorization);
+    const session = await requireAdminSession(req);
     const db = await database();
     const body = req.body || {};
-    const wallet = String(req.query.wallet || body.wallet || "").toLowerCase();
-    const requestedAction = String(req.query.action || body.action || "read");
-    const signature = String(req.query.signature || body.signature || "");
-    if (req.method === "POST" && (!signature || !await verifyWallet(`admin:${requestedAction}`, wallet as `0x${string}`, requestedAction, signature as `0x${string}`).catch(() => false))) return json(res, 401, { error: "Sign the protocol admin request with the connected wallet." });
-    if (!await isAdmin(db, identity, wallet)) return json(res, 403, { error: "Protocol admin authorization required." });
+    const action = String(req.query.action || body.action || "overview");
     if (req.method === "GET") {
-      if (String(req.query.action || "") === "monitor") {
-        const checks = [{ name: "database", ok: true, detail: "MongoDB reachable" }, { name: "email", ok: Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM), detail: process.env.RESEND_API_KEY && process.env.EMAIL_FROM ? "Resend configured" : "RESEND_API_KEY or EMAIL_FROM missing" }, { name: "genlayer", ok: Boolean(process.env.GENLAYER_ENDPOINT || process.env.VITE_GENLAYER_ENDPOINT), detail: process.env.GENLAYER_ENDPOINT || process.env.VITE_GENLAYER_ENDPOINT ? "Endpoint configured" : "Endpoint missing" }, { name: "rpc", ok: Boolean(process.env.BASE_SEPOLIA_RPC_URL || process.env.VITE_BASE_SEPOLIA_RPC_URL), detail: process.env.BASE_SEPOLIA_RPC_URL || process.env.VITE_BASE_SEPOLIA_RPC_URL ? "RPC configured" : "RPC missing" }, { name: "relayer", ok: Boolean(process.env.RELAYER_PRIVATE_KEY), detail: process.env.RELAYER_PRIVATE_KEY ? "Relayer key configured" : "Relayer key missing" }];
-        const [users, daos, proposals, memberships, grants, applications, messages, failedEmailJobs, failedProposalJobs, failedCreationJobs, recentAudit, recentEmailJobs] = await Promise.all([
-          db.collection("profiles").countDocuments({}), db.collection("daoIndex").countDocuments({ banned: { $ne: true } }), db.collection("proposals").countDocuments({}),
-          db.collection("daoMembers").countDocuments({ status: "active" }), db.collection("grants").countDocuments({}), db.collection("grantApplications").countDocuments({}),
-          db.collection("chatMessages").countDocuments({}), db.collection("emailJobs").find({ status: "failed" }).sort({ updatedAt: -1 }).limit(50).toArray(),
-          db.collection("proposalJobs").find({ status: "failed" }).sort({ updatedAt: -1 }).limit(50).toArray(), db.collection("daoCreationJobs").find({ status: "failed" }).sort({ updatedAt: -1 }).limit(50).toArray(),
-          db.collection("auditLogs").find({ scopeId: "protocol" }).sort({ createdAt: -1 }).limit(100).toArray(), db.collection("emailJobs").find({}).sort({ updatedAt: -1 }).limit(25).toArray(),
+      if (action === "audit") return json(res, 200, { events: await db.collection("auditLogs").find({ scopeId: "protocol" }).sort({ createdAt: -1 }).limit(200).toArray() });
+      if (action === "monitor" || action === "settings") {
+        const configured = (name: string, values: unknown[], detail: string) => ({ name, ok: values.every(Boolean), state: values.every(Boolean) ? "configured" : "missing_configuration", detail });
+        const checks = [
+          { name: "Database", ok: true, state: "reachable", detail: "MongoDB request completed" },
+          configured("Email", [process.env.RESEND_API_KEY, process.env.EMAIL_FROM], "Resend configuration; delivery is reported per message"),
+          configured("GenLayer", [process.env.GENLAYER_RPC_URL, process.env.GENLAYER_V2_EVALUATOR_ADDRESS, process.env.GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY], `Network: ${process.env.GENLAYER_NETWORK || "studio-dev"}`),
+          configured("Base", [process.env.BASE_RPC_URL, process.env.DEARMERS_REGISTRY_ADDRESS], "Base Sepolia registry configuration"),
+          configured("Automation", [process.env.BASE_AUTOMATION_PRIVATE_KEY, process.env.DELEGATION_ENCRYPTION_KEY], "Payment readiness is checked per DAO and proposal"),
+          configured("Password login", [process.env.ADMIN_PASSWORD_HASH], "Server-only password hash"),
+        ];
+        const [users, daos, proposals, memberships, failures] = await Promise.all([
+          db.collection("profiles").countDocuments({}), db.collection("daoIndex").countDocuments({}),
+          db.collection("proposals").countDocuments({}), db.collection("daoMembers").countDocuments({ status: "active" }),
+          Promise.all(["emailJobs", "proposalJobs", "daoCreationJobs", "executionJobs"].map(async (name) => (await db.collection(name).find({ error: { $exists: true, $ne: "" } }).sort({ updatedAt: -1 }).limit(25).toArray()).map((item) => ({ kind: name, id: String(item._id), daoId: item.daoId, proposalId: item.proposalId, error: item.error, status: item.status, updatedAt: item.updatedAt })))),
         ]);
-        const failedJobs = [...failedEmailJobs, ...failedProposalJobs, ...failedCreationJobs].sort((a, b) => new Date(String(b.updatedAt || 0)).getTime() - new Date(String(a.updatedAt || 0)).getTime()).slice(0, 100);
-        return json(res, 200, { checks, analytics: { users, daos, proposals, memberships, grants, applications, messages }, failedJobs, recentEmailJobs, recentAudit });
+        return json(res, 200, { checks, analytics: { users, daos, proposals, memberships }, failedJobs: failures.flat(), daos: action === "settings" ? await db.collection("daoIndex").find({}).project({ daoId: 1, name: 1 }).limit(200).toArray() : undefined });
       }
-      return json(res, 200, { users: await db.collection("profiles").find({}, { projection: { email: 0 } }).sort({ updatedAt: -1 }).limit(100).toArray(), daos: await db.collection("daoIndex").find({}).sort({ updatedAt: -1 }).limit(100).toArray(), proposals: await db.collection("proposals").find({ status: { $in: ["tied", "manual_funding", "tied_pending_admin", "approved_pending_manual_transfer"] } }).sort({ updatedAt: -1 }).limit(100).toArray(), applications: await db.collection("membershipApplications").find({ status: "pending" }).sort({ createdAt: 1 }).limit(200).toArray(), emailJobs: await db.collection("emailJobs").find({}).sort({ updatedAt: -1 }).limit(50).toArray() });
+      return json(res, 200, {
+        users: await db.collection("profiles").find({}).project({ identity: 1, wallet: 1, username: 1, displayName: 1, banned: 1 }).limit(200).toArray(),
+        daos: await db.collection("daoIndex").find({}).project({ daoId: 1, name: 1, banned: 1 }).limit(200).toArray(),
+        proposals: await db.collection("proposals").find({}).project({ title: 1, daoId: 1, status: 1 }).sort({ createdAt: -1 }).limit(200).toArray(),
+      });
     }
-    const action = String(req.query.action || body.action || "");
     if (["ban-user", "ban-dao"].includes(action)) {
+      if (!String(body.target || "").trim() || typeof body.banned !== "boolean") throw new HttpError(400, "A target and moderation decision are required.");
       const collection = action === "ban-user" ? "profiles" : "daoIndex";
-      const key = action === "ban-user" ? "wallet" : "daoId";
-      await db.collection(collection).updateOne({ [key]: String(body.target).toLowerCase() }, { $set: { banned: Boolean(body.banned), bannedAt: new Date(), bannedBy: identity.sub } });
+      const key = action === "ban-user" ? "identity" : "daoId";
+      const changed = await db.collection(collection).updateOne({ [key]: String(body.target) }, { $set: { banned: body.banned, bannedAt: new Date(), bannedBy: session.actor } });
+      if (!changed.matchedCount) throw new HttpError(404, "Moderation target not found.");
     } else if (action === "protocol-announcement") {
       const title = String(body.title || "").trim();
       const content = String(body.body || "").trim();
-      if (!title || !content) return json(res, 400, { error: "Bulletin title and body are required." });
-      const eventKey = `protocol:${title.toLowerCase()}:${content.slice(0, 32)}`;
-      const existing = await db.collection("announcements").findOne({ eventKey });
-      if (existing) return json(res, 200, { ok: true, duplicate: true, bulletinId: existing._id?.toString(), notifications: 0, email: { status: "already_published" } });
-      let email = { status: "not_attempted", sent: 0, error: "" };
-      let notificationCount = 0;
-      {
-        const item = { scope: "protocol", eventKey, title: title.slice(0, 140), body: content.slice(0, 5000), createdAt: new Date(), createdBy: identity.sub };
-        await db.collection("announcements").insertOne(item);
-        const recipients = await db.collection("profiles").find({ emailVerified: true, emailNotifications: { $ne: false } }).project({ identity: 1, email: 1 }).toArray();
-        const emails = recipients.map((recipient) => String(recipient.email || "")).filter(Boolean);
-        if (recipients.length) { await db.collection("notifications").insertMany(recipients.map((recipient) => ({ identity: recipient.identity, kind: "protocol_bulletin", title: item.title, body: item.body, readAt: null, createdAt: new Date(), targetUrl: "/control-room/bulletin" }))); notificationCount = recipients.length; }
-        if (emails.length) { try { const delivery = await sendEmail({ to: emails, subject: item.title, html: `<h1>${escapeHtml(item.title)}</h1><p>${escapeHtml(item.body)}</p>`, eventKey }); email = { status: "sent", sent: delivery.sent, error: "" }; await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "sent", providerId: delivery.id, sent: delivery.sent, updatedAt: new Date() } }, { upsert: true }); } catch (error) { email = { status: "failed", sent: 0, error: safeError(error) }; await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "failed", error: safeError(error), updatedAt: new Date() } }, { upsert: true }); } }
-        else email = { status: "skipped", sent: 0, error: "No opted-in recipients with verified email." };
+      if (!title || !content || title.length > 140 || content.length > 5000) throw new HttpError(400, "Supply a title (up to 140 characters) and bulletin (up to 5,000 characters).");
+      const eventKey = `protocol:${digest(`${title}\n${content}`)}`;
+      const saved = await db.collection("announcements").updateOne({ eventKey }, { $setOnInsert: { scope: "protocol", eventKey, title, body: content, createdAt: new Date(), createdBy: session.actor } }, { upsert: true });
+      if (!saved.upsertedCount) return json(res, 200, { ok: true, duplicate: true });
+      const recipients = await db.collection("profiles").find({ banned: { $ne: true } }).project({ identity: 1, email: 1, emailVerified: 1, emailNotifications: 1 }).toArray();
+      const notifications = recipients.filter((recipient) => recipient.identity).map((recipient) => ({ identity: String(recipient.identity).replace(/^privy:/, ""), kind: "protocol_bulletin", title, body: content, readAt: null, createdAt: new Date(), targetUrl: "/notifications" }));
+      if (notifications.length) await db.collection("notifications").insertMany(notifications);
+      const emails = recipients.filter((recipient) => recipient.emailVerified && recipient.emailNotifications !== false && recipient.email).map((recipient) => String(recipient.email));
+      let email = { status: "skipped", sent: 0, error: "No opted-in verified email recipients." };
+      if (emails.length) {
+        try {
+          const result = await sendEmail({ to: emails, subject: title, html: `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(content)}</p>`, eventKey });
+          email = { status: "sent", sent: result.sent, error: "" };
+        } catch (error) { email = { status: "failed", sent: 0, error: safeError(error) }; }
+        await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, ...email, updatedAt: new Date() } }, { upsert: true });
       }
-      await db.collection("auditLogs").insertOne({ scopeId: "protocol", type: action, actor: identity.sub, target: eventKey, createdAt: new Date() });
-      return json(res, 200, { ok: true, duplicate: false, bulletinId: eventKey, notifications: notificationCount, email });
-    } else if (action === "approve-membership" || action === "reject-membership") {
-      const applicationId = String(body.applicationId || "");
-      if (!ObjectId.isValid(applicationId)) return json(res, 400, { error: "A valid membership application is required." });
-      const application = await db.collection("membershipApplications").findOne({ _id: new ObjectId(applicationId), status: "pending" });
-      if (!application) return json(res, 404, { error: "Membership application not found." });
-      const status = action === "approve-membership" ? "approved" : "rejected";
-      await db.collection("membershipApplications").updateOne({ _id: new ObjectId(applicationId) }, { $set: { status, decidedBy: identity.sub, decidedAt: new Date() } });
-      if (status === "approved") await db.collection("daoMembers").updateOne({ daoId: application.daoId, actor: application.actor }, { $set: { daoId: application.daoId, actor: application.actor, wallet: application.wallet || null, role: "member", status: "active", joinedAt: new Date() } }, { upsert: true });
-      await db.collection("notifications").insertOne({ identity: application.actor, kind: `membership_${status}`, daoId: application.daoId, title: `Membership ${status}`, body: `Your membership request was ${status}.`, readAt: null, createdAt: new Date() });
-    } else if (action === "resolve-tie") {
-      const proposalId = String(body.proposalId || "");
-      if (!proposalId || typeof body.support !== "boolean") return json(res, 400, { error: "Proposal and tie decision are required." });
-      const query = ObjectId.isValid(proposalId) ? { _id: new ObjectId(proposalId) } : { proposalId };
-      await db.collection("proposals").updateOne(query, { $set: { status: body.support ? "passed" : "defeated", tieResolvedBy: identity.sub, tieResolutionReason: String(body.reason || "").slice(0, 1000), updatedAt: new Date() } });
-    } else if (action === "manual-funding") {
-      const proposalId = String(body.proposalId || "");
-      if (!proposalId || !body.reference) return json(res, 400, { error: "Proposal and transfer reference are required." });
-      const query = ObjectId.isValid(proposalId) ? { _id: new ObjectId(proposalId) } : { proposalId };
-      await db.collection("proposals").updateOne(query, { $set: { status: "manually_funded", fundingReference: String(body.reference).slice(0, 300), fundedBy: identity.sub, updatedAt: new Date() } });
-    } else return json(res, 400, { error: "Unsupported admin action." });
-    await db.collection("auditLogs").insertOne({ scopeId: "protocol", type: action, actor: identity.sub, target: body.target || body.proposalId || null, createdAt: new Date() });
-    return json(res, 200, { ok: true, action });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+      await db.collection("auditLogs").insertOne({ scopeId: "protocol", type: action, actor: session.actor, authMethod: session.authMethod, target: eventKey, createdAt: new Date() });
+      return json(res, 200, { ok: true, email, notifications: notifications.length });
+    } else throw new HttpError(403, "This action belongs to the authorized DAO control room, not protocol administration.");
+    await db.collection("auditLogs").insertOne({ scopeId: "protocol", type: action, actor: session.actor, authMethod: session.authMethod, target: body.target, createdAt: new Date() });
+    return json(res, 200, { ok: true });
+  } catch (error) { return errorResponse(res, error); }
 }

@@ -20,13 +20,11 @@ contract DearmersRegistry {
     error Unauthorized();
 
     address public owner;
-    address public immutable implementation;
     mapping(address => bool) public creationRelayers;
 
     constructor() {
         owner = msg.sender;
         creationRelayers[msg.sender] = true;
-        implementation = address(new DearmersDAO(address(this), keccak256("implementation"), DearmersDAO.DaoMode.Operating, address(this), address(this), address(this), address(this)));
     }
 
     modifier onlyOwner() {
@@ -91,24 +89,13 @@ contract DearmersRegistry {
     ) internal returns (address daoAddress) {
         if (admin == address(0) || daoId == bytes32(0) || treasury == address(0) || reviewOracle == address(0) || executor == address(0) || bytes(name).length == 0) revert InvalidInput();
         if (daos[daoId].dao != address(0)) revert AlreadyExists();
-        bytes memory bytecode = abi.encodePacked(hex"3d602d80600a3d3981f3363d3d373d3d3d363d73", implementation, hex"5af43d82803e903d91602b57fd5bf3");
-        assembly { daoAddress := create(0, add(bytecode, 32), mload(bytecode)) }
-        if (daoAddress == address(0)) revert InvalidInput();
-        DearmersDAO(daoAddress).initializeDAO(admin, daoId, mode, treasury, reviewOracle, executor, address(this));
+        DearmersDAO dao = new DearmersDAO(admin, daoId, mode, treasury, reviewOracle, executor, address(this));
+        daoAddress = address(dao);
         daos[daoId] = DAORecord(daoId, admin, daoAddress, treasury, mode, name, metadataUri, true);
         adminDaos[admin].push(daoId);
         daoIds.push(daoId);
         daoCount++;
         emit DAOCreated(daoId, daoAddress, msg.sender, mode, name);
-    }
-
-    function createConfiguredDAOFor(address admin, bytes32 daoId, address treasury, DearmersDAO.DaoMode mode, address reviewOracle, address executor, string calldata name, string calldata metadataUri, DearmersDAO.Constitution calldata policy, DearmersDAO.MembershipMode access, address voteRelayer, uint256 threshold) external onlyCreationRelayer returns (address daoAddress) {
-        if (daos[daoId].dao != address(0)) {
-            if (daos[daoId].admin != admin || daos[daoId].treasury != treasury) revert InvalidInput();
-            return daos[daoId].dao;
-        }
-        daoAddress = _createDAO(admin, daoId, treasury, mode, reviewOracle, executor, name, metadataUri);
-        DearmersDAO(daoAddress).initializeGovernance(policy, access, voteRelayer, threshold);
     }
 
     function setDAOStatus(bytes32 daoId, bool active) external {

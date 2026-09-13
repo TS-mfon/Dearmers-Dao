@@ -23,7 +23,7 @@ function client() {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["POST"])) return;
   try {
-    if (req.headers["x-internal-api-key"] !== process.env.INTERNAL_API_SECRET) return json(res, 401, { error: "Internal evaluation access required." });
+    if (!process.env.INTERNAL_API_SECRET || req.headers["x-internal-api-key"] !== process.env.INTERNAL_API_SECRET) return json(res, 401, { error: "Internal evaluation access required." });
     const { action, address, args, hash } = req.body || {};
     const genlayer = client();
     if (action === "get_transaction") {

@@ -9,7 +9,7 @@ import { ExplorerPage } from "./pages/ExplorerPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { CreateProposalRoute, DaoAnnouncementsRoute, DaoChatRoute, DaoHistoryRoute, DaoMembersRoute, DaoOverviewRoute, DaoProposalsRoute, GrantApplyRoute, GrantDetailRoute, GrantExplorerRoute, ProposalDetailRoute } from "./pages/DaoRoutes";
-import { AdminBulletinRoute, AdminDashboardRoute, AdminMembersRoute, AdminProposalsRoute, AdminSettingsRoute } from "./pages/AdminRoutes";
+import { ProtocolAdminRoutes } from "./pages/AdminRoutes";
 import { DaoAdminRoute } from "./pages/DaoAdminRoute";
 import { DaoCreationStatusPage } from "./pages/DaoCreationStatusPage";
 import "./App.css";
@@ -17,6 +17,7 @@ import "./App.css";
 type Notice = { tone: "info" | "success" | "error"; text: string };
 
 function App() {
+  const { user, linkWallet } = usePrivy();
   const [account, setAccount] = useState<Address | "">("");
   const [daos, setDaos] = useState<DaoRecord[]>([]);
   const [selected, setSelected] = useState<DaoRecord | null>(null);
@@ -27,6 +28,7 @@ function App() {
     try {
       const client = await walletClient();
       setAccount(client.account!.address);
+      if (user && !user.linkedAccounts.some((linked) => linked.type === "wallet" && linked.address.toLowerCase() === client.account!.address.toLowerCase())) linkWallet();
       setNotice({ tone: "success", text: `Connected ${client.account!.address}` });
       return client.account!.address;
     } catch (error) { setNotice({ tone: "error", text: explainContractError(error) }); return undefined; }
@@ -65,11 +67,7 @@ function App() {
     <Route path="/profile/edit" element={<ProfilePage account={account} onNotice={setNotice} />} />
     <Route path="/notifications" element={<NotificationsPage account={account} onNotice={setNotice} />} />
     <Route path="/__protocol" element={<Navigate to="/control-room" replace />} />
-    <Route path="/control-room" element={<AdminDashboardRoute />} />
-    <Route path="/control-room/bulletin" element={<AdminBulletinRoute onNotice={setNotice} />} />
-    <Route path="/control-room/proposals" element={<AdminProposalsRoute onNotice={setNotice} />} />
-    <Route path="/control-room/members" element={<AdminMembersRoute onNotice={setNotice} />} />
-    <Route path="/control-room/settings" element={<AdminSettingsRoute />} />
+    <Route path="/control-room/*" element={<ProtocolAdminRoutes />} />
     <Route path="/forge" element={<WorkspacePage title="Forge a Covenant" eyebrow="COVENANT INCEPTION" icon={<Landmark />} account={account} daos={daos} selected={selected} setSelected={setSelected} notice={notice} refresh={refresh} connect={connect} busy={busy}>
       <CreateOrganisationWizard account={account} onBusy={setBusy} onNotice={setNotice} onCreated={created} />
     </WorkspacePage>} />

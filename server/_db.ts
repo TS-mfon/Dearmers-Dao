@@ -3,6 +3,12 @@ import { MongoClient, type Db } from "mongodb";
 let clientPromise: Promise<MongoClient> | undefined;
 let indexesPromise: Promise<void> | undefined;
 
+export async function closeDatabase() {
+  if (clientPromise) await (await clientPromise).close();
+  clientPromise = undefined;
+  indexesPromise = undefined;
+}
+
 export async function database(): Promise<Db> {
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error("MONGODB_URI is not configured");
@@ -18,6 +24,19 @@ export async function database(): Promise<Db> {
       profiles.createIndex({ username: 1 }),
       profiles.createIndex({ identity: 1 }, { unique: true, sparse: true }),
       db.collection("daoIndex").createIndex({ daoId: 1 }, { unique: true }),
+      db.collection("adminSessions").createIndex({ tokenHash: 1 }, { unique: true }),
+      db.collection("adminChallenges").createIndex({ key: 1 }, { unique: true }),
+      db.collection("authRateLimits").createIndex({ key: 1 }, { unique: true }),
+      ...["adminSessions", "adminChallenges", "authRateLimits"].map((name) => db.collection(name).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })),
+      db.collection("proposalJobs").createIndex({ proposalId: 1 }, { unique: true }),
+      db.collection("proposals").createIndex({ daoId: 1, actor: 1, clientKey: 1 }, { unique: true, partialFilterExpression: { clientKey: { $type: "string" } } }),
+      db.collection("proposalVotes").createIndex({ proposalId: 1, wallet: 1 }, { unique: true, partialFilterExpression: { wallet: { $type: "string" } } }),
+      db.collection("executionJobs").createIndex({ executionKey: 1 }, { unique: true }),
+      db.collection("manualFundingReceipts").createIndex({ hash: 1 }, { unique: true }),
+      db.collection("daoCreationJobs").createIndex({ clientKey: 1 }, { unique: true }),
+      db.collection("delegations").createIndex({ creationKey: 1 }, { unique: true, partialFilterExpression: { creationKey: { $type: "string" } } }),
+      db.collection("announcements").createIndex({ eventKey: 1 }, { unique: true, partialFilterExpression: { eventKey: { $type: "string" } } }),
+      db.collection("auditLogs").createIndex({ eventKey: 1 }, { unique: true, partialFilterExpression: { eventKey: { $type: "string" } } }),
       db.collection("daoIndex").createIndex({ name: 1, category: 1 }),
       db.collection("follows").dropIndex("follower_1_target_1").catch(() => undefined).then(() => db.collection("follows").dropIndex("actor_1_target_1").catch(() => undefined)).then(() => db.collection("follows").createIndex({ actor: 1, target: 1, targetType: 1 }, { unique: true })),
       db.collection("bookmarks").dropIndex("follower_1_target_1").catch(() => undefined).then(() => db.collection("bookmarks").dropIndex("actor_1_target_1").catch(() => undefined)).then(() => db.collection("bookmarks").createIndex({ actor: 1, target: 1, targetType: 1 }, { unique: true })),

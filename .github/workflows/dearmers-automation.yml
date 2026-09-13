@@ -1,7 +1,7 @@
 name: Dearmers autonomous engine
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 jobs:
   reconcile:
@@ -25,3 +25,10 @@ jobs:
           ONESHOT_RELAYER_URL: ${{ secrets.ONESHOT_RELAYER_URL }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          GENLAYER_RPC_URL: ${{ secrets.GENLAYER_RPC_URL }}
+          GENLAYER_NETWORK: ${{ secrets.GENLAYER_NETWORK }}
+          GENLAYER_V2_EVALUATOR_ADDRESS: ${{ secrets.GENLAYER_V2_EVALUATOR_ADDRESS }}
+          GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY: ${{ secrets.GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY }}
+          BASE_PLATFORM_SIGNER_PRIVATE_KEY: ${{ secrets.BASE_PLATFORM_SIGNER_PRIVATE_KEY }}
+          BASE_VOTE_RELAYER_PRIVATE_KEY: ${{ secrets.BASE_VOTE_RELAYER_PRIVATE_KEY }}
+          REVIEW_ORACLE_PRIVATE_KEY: ${{ secrets.REVIEW_ORACLE_PRIVATE_KEY }}

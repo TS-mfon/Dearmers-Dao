@@ -29,6 +29,8 @@ contract DearmersDAOTest {
         dao.finalizeProposalVote(proposalId);
         require(dao.getProposal(proposalId).status == DearmersDAO.ProposalStatus.Approved, "not approved");
         vm.prank(executor);
+        require(dao.reserveProposalExecution(proposalId, keccak256("execution"), 0), "not reserved");
+        vm.prank(executor);
         dao.recordProposalExecution(proposalId, keccak256("base transaction"));
         require(dao.getProposal(proposalId).status == DearmersDAO.ProposalStatus.Executed, "not executed");
     }

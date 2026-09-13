@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import admin from "../server/admin.js";
+import adminAuth from "../server/admin-auth.js";
 import announcements from "../server/announcements.js";
 import assets from "../server/assets.js";
 import chat from "../server/chat.js";
@@ -20,11 +21,12 @@ import reviews from "../server/reviews.js";
 import search from "../server/search.js";
 import social from "../server/social.js";
 import votes from "../server/votes.js";
+import manualFunding from "../server/manual-funding.js";
 
 const handlers: Record<string, (req: VercelRequest, res: VercelResponse) => unknown> = {
-  admin, announcements, assets, chat, "dao-creation": daoCreation, daos, delegations, "dao-admin": daoAdmin,
+  admin, "admin-auth": adminAuth, announcements, assets, chat, "dao-creation": daoCreation, daos, delegations, "dao-admin": daoAdmin,
   genlayer, grants, history, media, members, membership, notifications, profile,
-  proposals, reviews, search, social, votes,
+  proposals, reviews, search, social, votes, "manual-funding": manualFunding,
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

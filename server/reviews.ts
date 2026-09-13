@@ -1,83 +1,76 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { chains, createClient } from "genlayer-js";
-import { TransactionHashVariant } from "genlayer-js/types";
-import { createPublicClient, createWalletClient, decodeEventLog, hashMessage, http, type Address, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "viem/chains";
-import { method, json, safeError } from "./_http.js";
+import { ObjectId, type Document } from "mongodb";
+import { hashMessage, isAddress, type Address, type Hex } from "viem";
+import type { Evaluation } from "../shared/proposals.js";
+import { baseClient, baseSigner, chainProposal, confirmed, daoAbi } from "./_chain.js";
 import { database } from "./_db.js";
-import { ObjectId } from "mongodb";
+import { errorResponse, HttpError, json, method } from "./_http.js";
 
-const statuses: Record<string, number> = { approve: 2, revision: 1, reject: 3, escalate: 6 };
-const relayAbi = [
-  { type: "function", name: "createProposalFor", inputs: [{ name: "proposer", type: "address" }, { name: "recipient", type: "address" }, { name: "amount", type: "uint256" }, { name: "kind", type: "uint8" }, { name: "title", type: "string" }, { name: "description", type: "string" }, { name: "category", type: "string" }, { name: "evidenceUri", type: "string" }, { name: "evidenceHash", type: "bytes32" }], outputs: [{ name: "proposalId", type: "uint256" }], stateMutability: "nonpayable" },
-  { type: "function", name: "recordProposalReview", inputs: [{ name: "proposalId", type: "uint256" }, { name: "status", type: "uint8" }, { name: "verdictHash", type: "bytes32" }, { name: "eligibleWeightSnapshot", type: "uint256" }], outputs: [], stateMutability: "nonpayable" },
-  { type: "function", name: "totalConfiguredWeight", inputs: [], outputs: [{ name: "", type: "uint256" }], stateMutability: "view" },
-  { type: "function", name: "registeredMembers", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "bool" }], stateMutability: "view" },
-  { type: "function", name: "registerMemberFor", inputs: [{ name: "account", type: "address" }], outputs: [], stateMutability: "nonpayable" },
-  { type: "event", name: "ProposalCreated", inputs: [{ name: "proposalId", type: "uint256", indexed: true }, { name: "kind", type: "uint8", indexed: false }, { name: "proposer", type: "address", indexed: true }, { name: "recipient", type: "address", indexed: true }, { name: "amount", type: "uint256", indexed: false }] },
-] as const;
+export async function relayReview(proposal: Document, job: Document, evaluation: Evaluation) {
+  const db = await database();
+  const proposalId = String(proposal._id);
+  const query = { _id: new ObjectId(proposalId) };
+  const address = String(proposal.daoAddress || job.daoAddress) as Address;
+  const setJob = async (values: Document) => { await db.collection("proposalJobs").updateOne({ proposalId }, { $set: { ...values, updatedAt: new Date() } }); };
+  if (evaluation.decision !== "approve") {
+    const status = evaluation.decision === "reject" ? "rejected_by_genlayer" : evaluation.decision === "revision" ? "corrections_required" : "escalated";
+    await db.collection("proposals").updateOne(query, { $set: { status, evaluation, genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } });
+    await setJob({ status: "complete", error: "" });
+    return;
+  }
+  await db.collection("proposals").updateOne(query, { $set: { status: "approved_for_voting", evaluation, updatedAt: new Date() } });
+  if (!isAddress(String(proposal.wallet || "")) || !isAddress(address)) throw new HttpError(409, "A verified proposer wallet and DAO address are required before voting can open.");
+  const wallet = baseSigner("REVIEW_ORACLE_PRIVATE_KEY");
+  const key = hashMessage(`${proposal.daoId}:${proposalId}`);
+  let storedId = await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalIdsByKey", args: [key] }) as bigint;
+  if (storedId === 0n) {
+    if (!job.createTxHash) {
+      const registered = await baseClient().readContract({ address, abi: daoAbi, functionName: "registeredMembers", args: [proposal.wallet] });
+      if (!registered) {
+        const member = await db.collection("daoMembers").findOne({ daoId: proposal.daoId, actor: proposal.actor, status: "active" });
+        const dao = await db.collection("daoIndex").findOne({ daoId: proposal.daoId, adminIdentity: proposal.actor });
+        if (!member && !dao) throw new HttpError(403, "The proposer is no longer an active DAO member.");
+        const memberHash = job.memberTxHash || await wallet.writeContract({ address, abi: daoAbi, functionName: "registerMemberFor", args: [proposal.wallet] });
+        await setJob({ memberTxHash: memberHash });
+        await confirmed(memberHash as Hex);
+      }
+      const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "createProposalForKey", args: [key, proposal.wallet, proposal.recipient || proposal.wallet, BigInt(String(proposal.amountAtomic || "0")), proposal.kind === "non_spend" ? 3 : 0, proposal.title, proposal.description, proposal.category || "general", String(proposal.evidence?.[0] || ""), hashMessage(JSON.stringify(proposal.evidence || []))] });
+      job.createTxHash = hash;
+      await setJob({ createTxHash: hash });
+    }
+    await confirmed(job.createTxHash as Hex);
+    storedId = await baseClient().readContract({ address, abi: daoAbi, functionName: "proposalIdsByKey", args: [key] }) as bigint;
+    if (storedId === 0n) throw new HttpError(409, "Onchain proposal creation is not yet confirmed.");
+  }
+  const onchainId = storedId - 1n;
+  await db.collection("proposals").updateOne(query, { $set: { onchainProposalId: String(onchainId), daoAddress: address } });
+  let state = await chainProposal(address, onchainId);
+  if (state.status === 0 || state.status === 1) {
+    if (!job.reviewTxHash) {
+      const weight = await baseClient().readContract({ address, abi: daoAbi, functionName: "totalConfiguredWeight" });
+      job.reviewTxHash = await wallet.writeContract({ address, abi: daoAbi, functionName: "recordProposalReview", args: [onchainId, 2, hashMessage(JSON.stringify(evaluation)), weight] });
+      await setJob({ reviewTxHash: job.reviewTxHash });
+    }
+    await confirmed(job.reviewTxHash as Hex);
+    state = await chainProposal(address, onchainId);
+  }
+  if (state.status !== 2) throw new HttpError(409, "The DAO contract has not opened voting for this review.");
+  await db.collection("proposals").updateOne(query, { $set: { status: "active_voting", evaluation, genlayerTxHash: job.genlayerTxHash, reviewTxHash: job.reviewTxHash, votingEndsAt: new Date(Number(state.votingEndsAt) * 1000), updatedAt: new Date() } });
+  await setJob({ status: "complete", error: "" });
+  const eventKey = `proposal-live:${proposalId}`;
+  const event = await db.collection("auditLogs").updateOne({ eventKey }, { $setOnInsert: { eventKey, scopeId: proposal.daoId, type: "proposal_voting_opened", proposalId, createdAt: new Date() } }, { upsert: true });
+  if (event.upsertedCount) {
+    const members = await db.collection("daoMembers").find({ daoId: proposal.daoId, status: "active" }).toArray();
+    if (members.length) await db.collection("notifications").insertMany(members.map((member) => ({ identity: member.actor, kind: "proposal_live", title: "Member voting is open", body: proposal.title, targetUrl: `/dao/${proposal.daoId}/proposals/${proposalId}`, readAt: null, createdAt: new Date() })));
+  }
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["POST"])) return;
   try {
-    if (req.headers["x-internal-api-key"] !== process.env.INTERNAL_API_SECRET) return json(res, 401, { error: "Internal review relay access required." });
-    const { daoId, daoAddress, proposalId, genlayerTxHash, evaluatorAddress } = req.body || {};
-    if (![daoId, daoAddress, proposalId, genlayerTxHash, evaluatorAddress].every(Boolean)) return json(res, 400, { error: "Missing review relay fields." });
-    const genlayerRpc = process.env.GENLAYER_RPC_URL;
-    if (!genlayerRpc) throw new Error("GenLayer RPC is not configured.");
-    const network = process.env.GENLAYER_NETWORK || "studio-dev";
-    const chain = network === "testnet-bradbury" ? chains.testnetBradbury : network === "testnet-asimov" ? chains.testnetAsimov : network === "studio-dev" ? chains.studioDevnet : chains.studionet;
-    const genlayer = createClient({ chain, endpoint: genlayerRpc });
-    const receipt = await genlayer.getTransaction({ hash: genlayerTxHash as never });
-    const status = String((receipt as Record<string, unknown>).statusName || (receipt as Record<string, unknown>).status || "").toUpperCase();
-    if (status !== "FINALIZED") return json(res, 409, { error: `GenLayer transaction is ${status || "not finalized"}.` });
-    const raw = await genlayer.readContract({ address: evaluatorAddress as Address, functionName: "get_evaluation", args: [daoId, String(proposalId)], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
-    const evaluation = typeof raw === "string" ? JSON.parse(raw) : raw as Record<string, unknown>;
-    if (evaluation.dao_id !== daoId || String(evaluation.proposal_id) !== String(proposalId)) return json(res, 422, { error: "Evaluation identity mismatch." });
-    const baseStatus = statuses[String(evaluation.decision)];
-    if (baseStatus === undefined) return json(res, 422, { error: "Unsupported GenLayer decision." });
-    const db = await database();
-    const proposalQuery = ObjectId.isValid(String(proposalId)) ? { _id: new ObjectId(String(proposalId)) } : { proposalId: String(proposalId) };
-    const offchain = await db.collection("proposals").findOne(proposalQuery);
-    if (!offchain) return json(res, 404, { error: "Offchain proposal was not found." });
-    const nextStatus = String(evaluation.decision) === "approve" ? "active_voting" : String(evaluation.decision) === "revision" ? "corrections_required" : String(evaluation.decision) === "reject" ? "rejected_by_genlayer" : "escalated";
-    if (nextStatus !== "active_voting") {
-      await db.collection("proposals").updateOne(proposalQuery, { $set: { status: nextStatus, daoAddress: String(daoAddress).toLowerCase(), evaluation, genlayerTxHash, votingEndsAt: null, updatedAt: new Date() } });
-      await db.collection("auditLogs").insertOne({ scopeId: daoId, type: `genlayer_${nextStatus}`, proposalId: String(proposalId), createdAt: new Date() });
-      return json(res, 200, { ok: true, decision: evaluation.decision, score: evaluation.score, status: nextStatus, baseTransactionHash: null });
-    }
-    const privateKey = process.env.REVIEW_ORACLE_PRIVATE_KEY as Hex | undefined;
-    const baseRpc = process.env.BASE_RPC_URL;
-    if (!privateKey || !baseRpc) throw new Error("Base review relay environment is incomplete");
-    const account = privateKeyToAccount(privateKey);
-    const publicClient = createPublicClient({ chain: baseSepolia, transport: http(baseRpc) });
-    const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(baseRpc) });
-    const proposer = String(offchain.wallet || "").toLowerCase() as Address;
-    const recipient = String(offchain.recipient || proposer).toLowerCase() as Address;
-    if (!proposer || !recipient) return json(res, 422, { error: "An approved proposal requires proposer and recipient wallets." });
-    let onchainProposalId = offchain.onchainProposalId ? BigInt(String(offchain.onchainProposalId)) : null;
-    if (onchainProposalId === null) {
-      const registered = await (publicClient as any).readContract({ address: daoAddress as Address, abi: relayAbi, functionName: "registeredMembers", args: [proposer] }) as boolean;
-      if (!registered) {
-        const memberHash = await (wallet as any).writeContract({ address: daoAddress as Address, abi: relayAbi, functionName: "registerMemberFor", args: [proposer] });
-        const memberReceipt = await publicClient.waitForTransactionReceipt({ hash: memberHash });
-        if (memberReceipt.status !== "success") throw new Error("DAO membership relay failed.");
-      }
-      const createHash = await (wallet as any).writeContract({ address: daoAddress as Address, abi: relayAbi, functionName: "createProposalFor", args: [proposer, recipient, BigInt(String(offchain.amount || "0")), 0, String(offchain.title), String(offchain.description), String(offchain.category || "general"), String((offchain.evidence || [])[0] || ""), hashMessage(JSON.stringify(offchain.evidence || []))] });
-      const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
-      const created = createReceipt.logs.map((log) => { try { return decodeEventLog({ abi: relayAbi, data: log.data, topics: (log as unknown as { topics: [] | [Hex, ...Hex[]] }).topics }) as { eventName: string; args: Record<string, unknown> }; } catch { return null; } }).find((log) => log?.eventName === "ProposalCreated");
-      if (!created?.args?.proposalId) throw new Error("Onchain proposal creation did not return an id.");
-      onchainProposalId = BigInt(String(created.args.proposalId));
-    }
-    const verdictHash = hashMessage(JSON.stringify(evaluation));
-    const eligibleWeight = await (publicClient as any).readContract({ address: daoAddress as Address, abi: relayAbi, functionName: "totalConfiguredWeight" }) as bigint;
-    const hash = await (wallet as any).writeContract({ address: daoAddress as Address, abi: relayAbi, functionName: "recordProposalReview", args: [onchainProposalId, baseStatus, verdictHash, eligibleWeight] });
-    const baseReceipt = await publicClient.waitForTransactionReceipt({ hash });
-    if (baseReceipt.status !== "success") throw new Error("Base review relay reverted");
-    await db.collection("proposals").updateOne(proposalQuery, { $set: { status: nextStatus, daoAddress: String(daoAddress).toLowerCase(), onchainProposalId: String(onchainProposalId), evaluation, genlayerTxHash, reviewTxHash: hash, votingEndsAt: new Date(Date.now() + 72 * 60 * 60 * 1000), updatedAt: new Date() } });
-    await db.collection("auditLogs").insertOne({ scopeId: daoId, type: `genlayer_${nextStatus}`, proposalId: String(proposalId), createdAt: new Date() });
-    json(res, 200, { ok: true, decision: evaluation.decision, score: evaluation.score, baseTransactionHash: hash });
-  } catch (error) { json(res, 500, { error: safeError(error) }); }
+    if (!process.env.INTERNAL_API_SECRET || req.headers["x-internal-api-key"] !== process.env.INTERNAL_API_SECRET) throw new HttpError(401, "Internal access required.");
+    const { reconcileReview } = await import("./_proposal-jobs.js");
+    await reconcileReview(String(req.body?.proposalId || ""));
+    return json(res, 200, { ok: true });
+  } catch (error) { return errorResponse(res, error); }
 }

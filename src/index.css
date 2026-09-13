@@ -6,3 +6,34 @@ html { background: #050505; }
 body { min-width: 320px; min-height: 100vh; background: #050505; }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
+:focus-visible { outline: 2px solid #b7ff3c; outline-offset: 4px; }
+.admin-route-main { min-width: 0; }
+.admin-route-main > h2 { margin-bottom: 24px; font-size: clamp(25px, 3vw, 38px); }
+.admin-sidebar nav a.active { color: #b7ff3c; border-left: 2px solid currentColor; padding-left: 12px; }
+.admin-login-form { margin-top: 28px; }
+.admin-form { max-width: 680px; margin: 24px 0; }
+.admin-form label, .media-field, .filter-field { display: grid; gap: 8px; }
+.admin-form input, .admin-form textarea, .admin-login-form input, .filter-field select { min-height: 44px; padding: 12px; }
+.filter-field { max-width: 320px; margin: 24px 0; }
+.admin-actions { flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.admin-actions button { min-height: 44px; }
+.review-evidence { margin-top: 20px; border-top: 1px solid rgba(255,255,255,.15); padding-top: 16px; }
+.review-evidence summary { cursor: pointer; min-height: 44px; font-weight: 700; }
+.review-evidence section { margin: 16px 0; }
+.preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-log-row { overflow-wrap: anywhere; }
+.evaluation-panel { margin-block: 24px; }
+.evaluation-panel .stack { margin-block: 20px; }
+@media (max-width: 760px) {
+  .admin-route { display: block; }
+  .admin-sidebar { position: static; width: auto; padding: 20px; }
+  .admin-sidebar h1 { font-size: 28px; }
+  .admin-sidebar nav { display: flex; flex-wrap: wrap; gap: 8px; }
+  .admin-sidebar nav a { min-height: 44px; display: inline-flex; align-items: center; padding: 8px; }
+  .admin-route-main { padding: 24px 18px; }
+  .admin-page-heading { flex-wrap: wrap; gap: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
