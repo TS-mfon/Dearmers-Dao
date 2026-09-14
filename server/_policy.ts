@@ -33,7 +33,12 @@ async function repairLegacyGovernance(dao: Record<string, unknown>, address: Add
     const activatesAt = BigInt(String(scheduled.activatesAt ?? 0));
     if (scheduledVersion === currentVersion + 1n && activatesAt > 0n) {
       if (latestBlock.timestamp < activatesAt) return "pending";
-      await confirmed(await signer.writeContract({ address, abi: daoAbi, functionName: "activateConstitution", args: [scheduledVersion] }));
+      try {
+        await confirmed(await signer.writeContract({ address, abi: daoAbi, functionName: "activateConstitution", args: [scheduledVersion] }));
+      } catch (error) {
+        const activeVersion = await client.readContract({ address, abi: daoAbi, functionName: "activeConstitutionVersion" }) as bigint;
+        if (activeVersion !== scheduledVersion) throw error;
+      }
       return "ready";
     }
   }
