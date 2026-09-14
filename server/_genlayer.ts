@@ -2,14 +2,14 @@ import { chains, createAccount, createClient } from "genlayer-js";
 import { TransactionHashVariant } from "genlayer-js/types";
 import type { Evaluation } from "../shared/proposals.js";
 import { HttpError } from "./_http.js";
+import { privateKeyFromEnv } from "./_signers.js";
 
 export function genlayerClient(signer = false) {
   const endpoint = process.env.GENLAYER_RPC_URL;
-  const key = process.env.GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY;
-  if (!endpoint || (signer && !key)) throw new HttpError(503, "GenLayer RPC or platform signer is not configured.");
+  if (!endpoint) throw new HttpError(503, "GenLayer RPC is not configured.");
   const network = process.env.GENLAYER_NETWORK || "studio-dev";
   const chain = network === "studio-dev" ? chains.studioDevnet : network === "testnet-bradbury" ? chains.testnetBradbury : network === "testnet-asimov" ? chains.testnetAsimov : chains.studionet;
-  return createClient({ endpoint, chain, ...(signer ? { account: createAccount(key as `0x${string}`) } : {}) });
+  return createClient({ endpoint, chain, ...(signer ? { account: createAccount(privateKeyFromEnv("GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY")) } : {}) });
 }
 
 export function evaluatorAddress() {

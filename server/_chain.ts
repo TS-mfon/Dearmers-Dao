@@ -4,14 +4,13 @@ import { baseSepolia } from "viem/chains";
 import daoArtifact from "../src/abi/DearmersDAO.json" with { type: "json" };
 import registryArtifact from "../src/abi/DearmersRegistry.json" with { type: "json" };
 import { HttpError } from "./_http.js";
+import { privateKeyFromEnv } from "./_signers.js";
 
 export const daoAbi = daoArtifact.abi as Abi;
 export const registryAbi = registryArtifact.abi as Abi;
 export const baseClient = () => createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_RPC_URL || "https://sepolia.base.org", { timeout: 12_000 }) });
 export function baseSigner(keyName: string) {
-  const key = process.env[keyName];
-  if (!key) throw new HttpError(503, `${keyName} is not configured.`);
-  return createWalletClient({ account: privateKeyToAccount(key as Hex), chain: baseSepolia, transport: http(process.env.BASE_RPC_URL || "https://sepolia.base.org", { timeout: 12_000 }) });
+  return createWalletClient({ account: privateKeyToAccount(privateKeyFromEnv(keyName)), chain: baseSepolia, transport: http(process.env.BASE_RPC_URL || "https://sepolia.base.org", { timeout: 12_000 }) });
 }
 export type ChainProposal = { proposer: Address; recipient: Address; amount: bigint; kind: number; status: number; votingEndsAt: bigint; yesWeight: bigint; noWeight: bigint; executionHash: Hex; constitutionVersion: bigint };
 export async function chainProposal(address: Address, proposalId: bigint) {

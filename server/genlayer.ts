@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { chains, createAccount, createClient } from "genlayer-js";
 import { method, json, safeError } from "./_http.js";
+import { privateKeyFromEnv } from "./_signers.js";
 
 const allowed = new Set(["register_dao", "update_dao", "set_active", "set_constitution", "evaluate_proposal"]);
 
@@ -14,10 +15,9 @@ function getChain() {
 }
 
 function client() {
-  const privateKey = process.env.GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY || process.env.GENLAYER_PRIVATE_KEY;
   const endpoint = process.env.GENLAYER_RPC_URL;
-  if (!privateKey || !endpoint) throw new Error("GenLayer platform signer is not configured.");
-  return createClient({ chain: getChain(), account: createAccount(privateKey as `0x${string}`), endpoint });
+  if (!endpoint) throw new Error("GenLayer RPC is not configured.");
+  return createClient({ chain: getChain(), account: createAccount(privateKeyFromEnv("GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY")), endpoint });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
