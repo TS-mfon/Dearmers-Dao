@@ -15,12 +15,14 @@
     "check:api": "tsc -p tsconfig.api.json"
   },
   "dependencies": {
+    "@genlayer/transaction-kit": "0.1.0-rc.2",
+    "@genlayer/transaction-kit-react": "0.1.0-rc.2",
     "@metamask/smart-accounts-kit": "^1.6.0",
     "@privy-io/react-auth": "^3.40.0",
     "@solana-program/system": "^0.14.1",
     "@solana-program/token": "^0.16.1",
     "@solana/kit": "^8.2.0",
-    "genlayer-js": "^2.0.0-rc.1",
+    "genlayer-js": "2.0.0-rc.1",
     "jose": "^6.2.11",
     "lucide-react": "^1.18.0",
     "mongodb": "^7.6.0",
