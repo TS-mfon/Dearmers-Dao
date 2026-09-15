@@ -48,7 +48,7 @@ export async function reconcileReview(proposalId: string, start = false, recover
       const args = [proposal.daoId, proposalId, JSON.stringify({ title: proposal.title, description: proposal.description, amount: proposal.amount, recipient: proposal.recipient, category: proposal.category, evidence: proposal.evidence || [], mission: proposal.missionSnapshot || dao.mission, constitution: proposal.constitutionSnapshot || dao.constitution })];
       const fees = await client.estimateTransactionFeesForWrite({ address, functionName: "evaluate_proposal", args });
       await update({ status: "broadcasting" });
-      const hash = String(await client.writeContract({ address, functionName: "evaluate_proposal", args, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } }));
+      const hash = String(await client.writeContract({ address, functionName: "evaluate_proposal", args, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } } as never));
       await update({ status: "submitted", genlayerTxHash: hash, genlayerStatus: "PENDING", explorerUrl: `${(process.env.GENLAYER_EXPLORER_URL || "https://explorer-studio-dev.genlayer.com").replace(/\/$/, "")}/tx/${hash}`, error: "" });
       await db.collection("proposals").updateOne({ _id: proposal._id }, { $set: { status: "evaluating", updatedAt: new Date() } });
       return;
