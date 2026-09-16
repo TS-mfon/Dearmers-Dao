@@ -31,6 +31,15 @@ function injectedProvider(): InjectedProvider {
   return providers.find((provider) => provider.isMetaMask && !provider.isRabby) || providers[0];
 }
 
+function metaMaskProvider(): InjectedProvider {
+  const injected = (window as unknown as { ethereum?: InjectedProvider }).ethereum;
+  if (!injected) throw new Error("Install MetaMask to create a DAO treasury.");
+  const providers = injected.providers?.length ? injected.providers : [injected];
+  const metaMask = providers.find((provider) => provider.isMetaMask && !provider.isRabby);
+  if (!metaMask) throw new Error("DAO creation requires the MetaMask browser extension because it must grant an ERC-7715 treasury delegation.");
+  return metaMask;
+}
+
 export async function ensureBaseSepolia(provider: InjectedProvider = injectedProvider()) {
   const targetChainId = `0x${baseSepolia.id.toString(16)}`;
   const currentChainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
@@ -147,6 +156,14 @@ export async function walletClient() {
   return createWalletClient({ chain: baseSepolia, account: accounts[0] as Address, transport: custom(provider as never) });
 }
 
+export async function metaMaskWalletClient() {
+  const provider = metaMaskProvider();
+  await ensureBaseSepolia(provider);
+  const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+  if (!accounts[0]) throw new Error("Connect MetaMask before continuing.");
+  return createWalletClient({ chain: baseSepolia, account: accounts[0] as Address, transport: custom(provider as never) });
+}
+
 export async function connectedAccount(): Promise<Address> {
   const client = await walletClient();
   if (!client.account) throw new Error("Wallet account unavailable.");
@@ -159,7 +176,7 @@ export function createDaoId(name: string, admin: Address): Hash {
 
 export async function createDao(input: { name: string; mode: DaoMode; treasury: Address; reviewOracle: Address; executor: Address; metadataUri: string }) {
   requireRegistry();
-  const client = await walletClient();
+  const client = await metaMaskWalletClient();
   const admin = client.account!.address;
   const reviewOracle = normalizeConfiguredAddress(input.reviewOracle, "Review oracle address");
   const executor = normalizeConfiguredAddress(input.executor, "Automation executor address");

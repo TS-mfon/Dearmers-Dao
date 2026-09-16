@@ -11,6 +11,7 @@ import { reconcileReview } from "./_proposal-jobs.js";
 import { syncProposalState } from "./_proposal-state.js";
 import { reconcileCreation } from "./_dao-creation.js";
 import { syncDaoPolicy } from "./_policy.js";
+import { sendEmail } from "./_email.js";
 
 const transferAbi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)", "event Transfer(address indexed from, address indexed to, uint256 value)"]);
 type RelayerResult = { requiredPaymentAmount?: string; context?: unknown; taskId?: string; status?: string; error?: string; message?: string; receipt?: { transactionHash?: Hex }; hash?: Hex; txHash?: Hex; targetAddress?: Address; feeCollector?: Address };
@@ -106,6 +107,27 @@ export async function executeProposal(proposal: Document) {
   } finally { await db.collection("executionJobs").updateOne({ executionKey, lease }, { $unset: { lease: "", leaseUntil: "" } }); }
 }
 
+export async function reconcileProposalExecution(proposal: Document) {
+  if (proposal.onchainProposalId === undefined || !proposal.daoAddress) throw new Error("This proposal has not reached Base voting yet.");
+  const address = proposal.daoAddress as Address;
+  const proposalId = BigInt(String(proposal.onchainProposalId));
+  let state = await chainProposal(address, proposalId);
+  if (state.status === 2) {
+    if (Number(state.votingEndsAt) > Date.now() / 1000) throw new Error("Voting is still open.");
+    const wallet = baseSigner("BASE_AUTOMATION_PRIVATE_KEY");
+    const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "finalizeProposalVote", args: [proposalId] });
+    await confirmed(hash);
+    state = await chainProposal(address, proposalId);
+  }
+  await syncProposalState(proposal);
+  if ([4, 10].includes(state.status) && state.kind === 0) await executeProposal(proposal);
+  const db = await database();
+  return {
+    proposal: await db.collection("proposals").findOne({ _id: proposal._id }),
+    executionJob: await db.collection("executionJobs").findOne({ proposalId: String(proposal._id) }, { projection: { lease: 0, leaseUntil: 0, paymentRequest: 0 } }),
+  };
+}
+
 export async function reconcileApplication(limit = 25) {
   const db = await database(); const errors: string[] = []; let processed = 0;
   const attempt = async (task: () => Promise<unknown>) => { try { await task(); processed++; } catch (error) { errors.push(safeError(error)); } };
@@ -113,6 +135,15 @@ export async function reconcileApplication(limit = 25) {
   for (const dao of await db.collection("daoIndex").find({ policySyncStatus: { $ne: "ready" } }).limit(limit).toArray()) await attempt(() => syncDaoPolicy(dao.daoId));
   for (const proposal of await db.collection("proposals").find({ status: { $in: ["awaiting_ai_review", "evaluating", "approved_for_voting"] } }).limit(limit).toArray()) await attempt(() => reconcileReview(String(proposal._id)));
   for (const vote of await db.collection("proposalVotes").find({ status: "pending", txHash: { $exists: true } }).limit(limit).toArray()) await attempt(async () => { const receipt = await baseClient().getTransactionReceipt({ hash: vote.txHash as Hex }); await db.collection("proposalVotes").updateOne({ _id: vote._id }, { $set: { status: receipt.status === "success" ? "confirmed" : "failed" } }); });
+  for (const email of await db.collection("emailJobs").find({ status: "failed", attempts: { $lt: 4 }, nextAttemptAt: { $lte: new Date() }, recipients: { $type: "array" }, subject: { $type: "string" }, html: { $type: "string" } }).limit(limit).toArray()) await attempt(async () => {
+    try {
+      const delivery = await sendEmail({ to: email.recipients, subject: email.subject, html: email.html, eventKey: email.eventKey });
+      await db.collection("emailJobs").updateOne({ _id: email._id }, { $set: { status: "sent", providerId: delivery.id, sent: delivery.sent, updatedAt: new Date() }, $unset: { error: "", nextAttemptAt: "" } });
+    } catch (error) {
+      const attempts = Number(email.attempts || 0) + 1;
+      await db.collection("emailJobs").updateOne({ _id: email._id }, { $set: { attempts, error: safeError(error), nextAttemptAt: new Date(Date.now() + Math.min(60, 5 * 2 ** attempts) * 60_000), updatedAt: new Date() } });
+    }
+  });
   const wallet = process.env.BASE_AUTOMATION_PRIVATE_KEY ? baseSigner("BASE_AUTOMATION_PRIVATE_KEY") : null;
   for (const proposal of await db.collection("proposals").find({ onchainProposalId: { $exists: true }, status: { $in: ["active_voting", "passed", "execution_pending", "manual_funding", "tied"] } }).limit(limit).toArray()) await attempt(async () => {
     const state = await chainProposal(proposal.daoAddress as Address, BigInt(proposal.onchainProposalId));

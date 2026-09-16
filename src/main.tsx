@@ -16,7 +16,7 @@ class AppBoundary extends Component<{ children: ReactNode }, { error: Error | nu
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AppBoundary>
-      {window.location.pathname.startsWith('/control-room') ? <BrowserRouter><Routes><Route path="/control-room/*" element={<ProtocolAdminRoutes />} /></Routes></BrowserRouter> : <PrivyProvider appId={import.meta.env.VITE_PRIVY_APP_ID || ''} config={{ appearance: { theme: 'dark', accentColor: '#b7ff3c' } }}>
+      {window.location.pathname.startsWith('/control-room') ? <BrowserRouter><Routes><Route path="/control-room/*" element={<ProtocolAdminRoutes />} /></Routes></BrowserRouter> : <PrivyProvider appId={import.meta.env.VITE_PRIVY_APP_ID || ''} config={{ appearance: { theme: 'dark', accentColor: '#b7ff3c' }, embeddedWallets: { ethereum: { createOnLogin: 'users-without-wallets' } } }}>
         <App />
       </PrivyProvider>}
     </AppBoundary>

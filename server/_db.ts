@@ -41,6 +41,7 @@ export async function database(): Promise<Db> {
       db.collection("follows").dropIndex("follower_1_target_1").catch(() => undefined).then(() => db.collection("follows").dropIndex("actor_1_target_1").catch(() => undefined)).then(() => db.collection("follows").createIndex({ actor: 1, target: 1, targetType: 1 }, { unique: true })),
       db.collection("bookmarks").dropIndex("follower_1_target_1").catch(() => undefined).then(() => db.collection("bookmarks").dropIndex("actor_1_target_1").catch(() => undefined)).then(() => db.collection("bookmarks").createIndex({ actor: 1, target: 1, targetType: 1 }, { unique: true })),
       db.collection("notifications").createIndex({ wallet: 1, createdAt: -1 }),
+      db.collection("notifications").createIndex({ eventKey: 1, identity: 1 }, { unique: true, partialFilterExpression: { eventKey: { $type: "string" }, identity: { $type: "string" } } }),
       db.collection("announcements").createIndex({ daoId: 1, createdAt: -1 }),
       db.collection("assetMetadata").createIndex({ chain: 1, address: 1 }, { unique: true }),
       db.collection("adminAuditLog").createIndex({ createdAt: -1 }),

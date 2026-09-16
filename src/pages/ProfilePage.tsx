@@ -3,7 +3,6 @@ import { usePrivy } from "@privy-io/react-auth";
 import { Activity, ArrowLeft, ArrowUpRight, Camera, Check, ExternalLink, GitBranch, Heart, Save, UserRound, Users } from "lucide-react";
 import type { Address } from "viem";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { walletClient } from "../lib/dao";
 
 export type PublicProfile = { wallet?: string; identity?: string; username?: string; displayName?: string; bio?: string; website?: string; github?: string; avatarUrl?: string; bannerUrl?: string; location?: string; timezone?: string; profileVisibility?: string; emailNotifications?: boolean };
 type Notice = { tone: "info" | "success" | "error"; text: string };
@@ -14,15 +13,15 @@ async function responseBody<T>(response: Response): Promise<T> {
   return body as T;
 }
 
-export function ProfilePage({ account, onNotice }: { account: Address | ""; onNotice: (notice: Notice) => void }) {
+export function ProfilePage({ onNotice }: { account: Address | ""; onNotice: (notice: Notice) => void }) {
   const { user, getAccessToken, logout } = usePrivy();
   const { wallet, identity } = useParams();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const profileWallet = (wallet || (!identity ? account : "")) as Address | "";
+  const profileWallet = (wallet || "") as Address | "";
   const profileIdentity = identity || (!profileWallet && user ? `privy:${user.id}` : "");
-  const isOwner = Boolean((account && profileWallet && account.toLowerCase() === profileWallet.toLowerCase()) || (!wallet && !identity && profileIdentity));
+  const isOwner = Boolean(user && !wallet && (!identity || identity === `privy:${user.id}`));
   const editing = location.pathname === "/profile/edit";
   const [profile, setProfile] = useState<PublicProfile>({ wallet: profileWallet, identity: profileIdentity });
   const [draft, setDraft] = useState<PublicProfile>(profile);
@@ -109,9 +108,8 @@ export function ProfilePage({ account, onNotice }: { account: Address | ""; onNo
     event.preventDefault();
     if (!isOwner) return onNotice({ tone: "error", text: "Only the profile owner can edit this identity." });
     try {
-      setBusy(true); const token = await getAccessToken(); const client = account ? await walletClient() : null;
-      const signature = client ? await client.signMessage({ account: client.account!, message: `Dearmers-Dao\nAction: save-profile\nWallet: ${account.toLowerCase()}\nResource: ${draft.github || draft.username || account}` }) : "";
-      const body = await responseBody<{ profile?: PublicProfile }>(await fetch("/api/profile", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ ...draft, wallet: account || undefined, identity: profileIdentity || draft.identity, signature }) }));
+      setBusy(true); const token = await getAccessToken(); if (!token || !user) throw new Error("Sign in with Privy to update your profile.");
+      const body = await responseBody<{ profile?: PublicProfile }>(await fetch("/api/profile", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ ...draft, identity: `privy:${user.id}` }) }));
       const next = body.profile || draft; setProfile(next); setDraft(next); window.dispatchEvent(new Event("dearmers:profile-updated")); onNotice({ tone: "success", text: "Profile updated and ready for discovery." }); navigate("/profile");
     } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Profile could not be saved." }); }
     finally { setBusy(false); }

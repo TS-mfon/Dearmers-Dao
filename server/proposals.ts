@@ -1,13 +1,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { isAddress, parseUnits, type Address, type Hex } from "viem";
 import { database } from "./_db.js";
 import { HttpError, errorResponse, json, method } from "./_http.js";
-import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
+import { bearerIdentity, requirePrivyIdentity, verifiedEmbeddedWallet } from "./_privy.js";
 import { verifyWallet } from "./_auth.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { reconcileReview } from "./_proposal-jobs.js";
 import { reviewCapabilities, type ReviewJob } from "../shared/proposals.js";
+import { reconcileProposalExecution } from "./_automation.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
@@ -26,9 +28,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const authorized = Boolean(identity && (identity.sub === proposal.actor || daoAdmin));
       const job = await db.collection("proposalJobs").findOne({ proposalId }, { projection: { lease: 0, leaseUntil: 0 } });
       const capabilities = reviewCapabilities(String(proposal.status), job as ReviewJob | null, authorized);
+      const executionJob = await db.collection("executionJobs").findOne({ proposalId }, { projection: { lease: 0, leaseUntil: 0, paymentRequest: 0 } });
+      const votingEnded = proposal.status !== "active_voting" || (proposal.votingEndsAt && new Date(proposal.votingEndsAt).getTime() <= Date.now());
+      capabilities.canReconcileExecution = Boolean(authorized && votingEnded && proposal.onchainProposalId !== undefined && ["active_voting", "passed", "execution_pending"].includes(String(proposal.status)) && !["broadcasting", "submission_unknown"].includes(String(executionJob?.status || "")));
       if (req.method === "POST") {
-        if (!authorized) throw new HttpError(403, "Only the proposal creator or this DAO's admin can trigger review.");
+        if (!authorized) throw new HttpError(403, "Only the proposal creator or this DAO's admin can manage this proposal.");
         const action = String(body.action || "");
+        if (action === "reconcile-execution") {
+          if (!capabilities.canReconcileExecution) throw new HttpError(409, "Automatic execution cannot be retried in the proposal's current state.");
+          const result = await reconcileProposalExecution(proposal);
+          const eventKey = `proposal-execution-reconcile:${proposalId}:${randomUUID()}`;
+          await db.collection("auditLogs").updateOne({ eventKey }, { $setOnInsert: { eventKey, scopeId: proposal.daoId, type: action, actor: identity!.sub, proposalId, createdAt: new Date() } }, { upsert: true });
+          return json(res, 202, { ok: true, ...result });
+        }
         const allowed = action === "start-review" ? capabilities.canStart : action === "retry-review" ? capabilities.canRetry : action === "refresh-review" ? capabilities.canRefresh : action === "recover-review" ? capabilities.canRecover : false;
         if (!allowed) throw new HttpError(409, "That action is not available in the proposal's current state.");
         await reconcileReview(proposalId, ["start-review", "retry-review"].includes(action), action === "recover-review" ? String(body.hash || "") : "");
@@ -37,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const membership = identity ? await db.collection("daoMembers").findOne({ daoId: proposal.daoId, actor: identity.sub, status: "active" }) : null;
       const vote = identity ? await db.collection("proposalVotes").findOne({ proposalId, actor: identity.sub }, { projection: { status: 1, txHash: 1, support: 1 } }) : null;
-      return json(res, 200, { proposal, job, capabilities, canVote: Boolean(identity && (membership || daoAdmin) && proposal.status === "active_voting" && new Date(proposal.votingEndsAt).getTime() > Date.now() && !vote), vote });
+      return json(res, 200, { proposal, job, executionJob, capabilities, canVote: Boolean(identity && (membership || daoAdmin) && proposal.status === "active_voting" && new Date(proposal.votingEndsAt).getTime() > Date.now() && !vote), vote });
     }
     if (!daoId) throw new HttpError(400, "DAO id is required.");
     if (req.method === "GET") return json(res, 200, { proposals: await db.collection("proposals").find({ daoId }).sort({ createdAt: -1 }).limit(100).toArray() });
@@ -55,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (kind === "spend" && !isAddress(String(body.recipient || ""))) throw new HttpError(400, "A valid recipient wallet is required for spending proposals.");
     const clientKey = String(body.clientKey || "");
     if (!clientKey || clientKey.length > 100) throw new HttpError(400, "A stable submission key is required.");
-    const wallet = String(body.wallet || "").toLowerCase();
+    const wallet = await verifiedEmbeddedWallet(identity!, String(body.wallet || ""));
     const signature = String(body.signature || "");
     if (!isAddress(wallet) || !/^0x[a-fA-F0-9]+$/.test(signature) || !await verifyWallet("submit-proposal", wallet as Address, `${daoId}:${clientKey}`, signature as Hex)) throw new HttpError(401, "Sign the proposal submission with your connected wallet.");
     const evidence: string[] = Array.isArray(body.evidence) ? body.evidence.map(String) : [];

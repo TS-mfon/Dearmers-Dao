@@ -5,6 +5,7 @@ import type { Evaluation } from "../shared/proposals.js";
 import { baseClient, baseSigner, chainProposal, confirmed, daoAbi } from "./_chain.js";
 import { database } from "./_db.js";
 import { errorResponse, HttpError, json, method } from "./_http.js";
+import { escapeHtml, sendEmail } from "./_email.js";
 
 export async function relayReview(proposal: Document, job: Document, evaluation: Evaluation) {
   const db = await database();
@@ -67,7 +68,22 @@ export async function relayReview(proposal: Document, job: Document, evaluation:
   const event = await db.collection("auditLogs").updateOne({ eventKey }, { $setOnInsert: { eventKey, scopeId: proposal.daoId, type: "proposal_voting_opened", proposalId, createdAt: new Date() } }, { upsert: true });
   if (event.upsertedCount) {
     const members = await db.collection("daoMembers").find({ daoId: proposal.daoId, status: "active" }).toArray();
-    if (members.length) await db.collection("notifications").insertMany(members.map((member) => ({ identity: member.actor, kind: "proposal_live", title: "Member voting is open", body: proposal.title, targetUrl: `/dao/${proposal.daoId}/proposals/${proposalId}`, readAt: null, createdAt: new Date() })));
+    await Promise.all(members.filter((member) => member.actor).map((member) => db.collection("notifications").updateOne(
+      { eventKey, identity: member.actor },
+      { $setOnInsert: { eventKey, identity: member.actor, kind: "proposal_live", title: "Member voting is open", body: proposal.title, targetUrl: `/dao/${proposal.daoId}/proposals/${proposalId}`, readAt: null, createdAt: new Date() } },
+      { upsert: true },
+    )));
+    const identities = members.map((member) => member.actor).filter(Boolean);
+    const profiles = identities.length ? await db.collection("profiles").find({ identity: { $in: identities.map((identity) => `privy:${identity}`) }, email: { $type: "string" }, emailNotifications: { $ne: false } }).project({ email: 1 }).toArray() : [];
+    const recipients = profiles.map((profile) => String(profile.email || "")).filter(Boolean);
+    if (recipients.length) {
+      try {
+        const delivery = await sendEmail({ to: recipients, subject: `Voting is open: ${proposal.title}`, html: `<h1>${escapeHtml(proposal.title)}</h1><p>GenLayer approved this proposal for member voting. Sign in to Dreamers DAO to review the verdict and vote before the deadline.</p>`, eventKey });
+        await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, kind: "proposal_live", recipients, status: "sent", providerId: delivery.id, sent: delivery.sent, attempts: 1, updatedAt: new Date() } }, { upsert: true });
+      } catch (error) {
+        await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, kind: "proposal_live", recipients, subject: `Voting is open: ${proposal.title}`, html: `<h1>${escapeHtml(proposal.title)}</h1><p>GenLayer approved this proposal for member voting. Sign in to Dreamers DAO to vote.</p>`, status: "failed", error: error instanceof Error ? error.message.slice(0, 300) : "Email delivery failed.", attempts: 1, nextAttemptAt: new Date(Date.now() + 5 * 60_000), updatedAt: new Date() } }, { upsert: true });
+      }
+    }
   }
 }
 

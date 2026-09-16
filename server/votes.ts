@@ -3,7 +3,7 @@ import { ObjectId } from "mongodb";
 import { verifyTypedData, type Address, type Hex } from "viem";
 import { database } from "./_db.js";
 import { HttpError, errorResponse, json, method, safeError } from "./_http.js";
-import { requirePrivyIdentity, verifiedWallet } from "./_privy.js";
+import { requirePrivyIdentity, verifiedEmbeddedWallet } from "./_privy.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { baseClient, baseSigner, chainProposal, confirmed, daoAbi } from "./_chain.js";
 import { syncProposalState } from "./_proposal-state.js";
@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!proposal || proposal.status !== "active_voting" || proposal.onchainProposalId === undefined) throw new HttpError(409, "This proposal is not accepting votes.");
     const membership = await db.collection("daoMembers").findOne({ daoId: proposal.daoId, actor: identity.sub, status: "active" });
     if (!membership && !await findDaoForIdentity(db, proposal.daoId, identity)) throw new HttpError(403, "Active DAO membership is required to vote.");
-    const voter = await verifiedWallet(identity, String(body.wallet || "")) as Address;
+    const voter = await verifiedEmbeddedWallet(identity, String(body.wallet || "")) as Address;
     const address = proposal.daoAddress as Address; const onchainId = BigInt(proposal.onchainProposalId);
     const state = await chainProposal(address, onchainId);
     if (state.status !== 2 || Number(state.votingEndsAt) <= Date.now() / 1000) throw new HttpError(409, "Member voting has closed.");

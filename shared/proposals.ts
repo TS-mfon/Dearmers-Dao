@@ -1,6 +1,7 @@
 export type Evaluation = { decision: string; score?: number; reasoning?: string; critique?: string; evidence_report?: string; corrections?: string; uncertainty?: string; rules_version?: string; scope_id?: string; subject_id?: string; subject_type?: string };
 export type ReviewJob = { status: string; genlayerTxHash?: string; genlayerStatus?: string; explorerUrl?: string; error?: string; updatedAt?: string; reviewTxHash?: string };
-export type ReviewCapabilities = { canStart: boolean; canRetry: boolean; canRefresh: boolean; canRecover: boolean; canReplace: boolean };
+export type ExecutionJob = { status: string; error?: string; paymentHash?: string; taskId?: string; updatedAt?: string };
+export type ReviewCapabilities = { canStart: boolean; canRetry: boolean; canRefresh: boolean; canRecover: boolean; canReplace: boolean; canReconcileExecution?: boolean };
 export type Proposal = { _id: string; daoId: string; actor?: string; wallet?: string; proposalId?: string; title: string; description: string; status: string; kind?: string; amount?: string; category?: string; recipient?: string; evidence?: string[]; createdAt?: string; votingEndsAt?: string; daoAddress?: string; onchainProposalId?: string; evaluation?: Evaluation | null; yesWeight?: string; noWeight?: string; executionHash?: string; supersedes?: string };
 export const reviewPending = (status: string) => ["awaiting_ai_review", "submitted", "evaluating", "approved_for_voting", "review_relay_pending"].includes(status);
 
