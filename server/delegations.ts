@@ -4,7 +4,7 @@ import { database } from "./_db.js";
 import { encrypt } from "./_crypto.js";
 import { method, json, safeError } from "./_http.js";
 import { verifyWallet } from "./_auth.js";
-import { requirePrivyIdentity, verifiedWallet } from "./_privy.js";
+import { requirePrivyIdentity } from "./_privy.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["POST"])) return;
@@ -15,7 +15,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!isAddress(String(treasury)) || !isAddress(String(executor)) || !isAddress(String(token)) || String(wallet).toLowerCase() !== String(treasury).toLowerCase()) return json(res, 400, { error: "Delegation addresses are invalid." });
     const resource = `${creationKey}:${String(treasury).toLowerCase()}:${String(executor).toLowerCase()}`;
     if (!await verifyWallet("store-delegation", wallet as Address, resource, signature as Hex)) return json(res, 401, { error: "Invalid wallet signature." });
-    await verifiedWallet(identity, String(wallet));
     const db = await database();
     if (daoId || daoAddress) return json(res, 400, { error: "Creation delegations cannot rebind an existing DAO." });
     await db.collection("delegations").updateOne({ creationKey, actor: identity.sub }, { $set: { creationKey, actor: identity.sub, treasury: String(treasury).toLowerCase(), executor: String(executor).toLowerCase(), token: String(token).toLowerCase(), payload: encrypt(permissions), updatedAt: new Date() } }, { upsert: true });
