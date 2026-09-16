@@ -1,9 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { ObjectId } from "mongodb";
-import { isAddress, parseUnits } from "viem";
+import { isAddress, parseUnits, type Address, type Hex } from "viem";
 import { database } from "./_db.js";
 import { HttpError, errorResponse, json, method } from "./_http.js";
-import { bearerIdentity, requirePrivyIdentity, verifiedWallet } from "./_privy.js";
+import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
+import { verifyWallet } from "./_auth.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { reconcileReview } from "./_proposal-jobs.js";
 import { reviewCapabilities, type ReviewJob } from "../shared/proposals.js";
@@ -52,9 +53,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const amountAtomic = parseUnits(amount, 6);
     const kind = amountAtomic === 0n ? "non_spend" : "spend";
     if (kind === "spend" && !isAddress(String(body.recipient || ""))) throw new HttpError(400, "A valid recipient wallet is required for spending proposals.");
-    const wallet = await verifiedWallet(identity!, String(body.wallet || ""));
     const clientKey = String(body.clientKey || "");
     if (!clientKey || clientKey.length > 100) throw new HttpError(400, "A stable submission key is required.");
+    const wallet = String(body.wallet || "").toLowerCase();
+    const signature = String(body.signature || "");
+    if (!isAddress(wallet) || !/^0x[a-fA-F0-9]+$/.test(signature) || !await verifyWallet("submit-proposal", wallet as Address, `${daoId}:${clientKey}`, signature as Hex)) throw new HttpError(401, "Sign the proposal submission with your connected wallet.");
     const evidence: string[] = Array.isArray(body.evidence) ? body.evidence.map(String) : [];
     if (evidence.length > 20 || evidence.some((url) => { try { return new URL(url).protocol !== "https:"; } catch { return true; } })) throw new HttpError(400, "Supply at most 20 valid HTTPS evidence links.");
     let supersedes: string | undefined;

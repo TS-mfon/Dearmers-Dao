@@ -4,10 +4,10 @@ import { usePrivy, useSignTypedData } from "@privy-io/react-auth";
 import type { Address } from "viem";
 import { ProposalReview, type ProposalResponse } from "../components/ProposalReview";
 import { useSessionHeaders } from "../lib/session";
-import type { DaoRecord } from "../lib/dao";
+import { walletClient, type DaoRecord } from "../lib/dao";
 
 type Props = { daos: DaoRecord[]; account: Address | ""; onNotice: (notice: { tone: "info" | "success" | "error"; text: string }) => void };
-export function CreateProposalRoute({ onNotice }: Props) {
+export function CreateProposalRoute({ account, onNotice }: Props) {
   const { daoId } = useParams(); const [search] = useSearchParams(); const navigate = useNavigate(); const headers = useSessionHeaders(); const { authenticated, login, linkWallet } = usePrivy();
   const [form, setForm] = useState({ title: "", description: "", amount: "0", recipient: "", category: "general", evidence: "" });
   const [clientKey] = useState(() => crypto.randomUUID()); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
@@ -16,7 +16,11 @@ export function CreateProposalRoute({ onNotice }: Props) {
     event.preventDefault(); if (!authenticated) return login();
     setSaving(true); setError("");
     try {
-      const response = await fetch("/api/proposals", { method: "POST", headers: { ...(await headers()), "content-type": "application/json" }, body: JSON.stringify({ ...form, daoId, supersedes, clientKey, evidence: form.evidence.split("\n").map((value) => value.trim()).filter(Boolean) }) });
+      if (!account) { linkWallet(); throw new Error("Connect and link the wallet that will submit this proposal."); }
+      const client = await walletClient();
+      if (client.account?.address.toLowerCase() !== account.toLowerCase()) throw new Error("Reconnect the wallet shown in your Dreamers DAO session.");
+      const signature = await client.signMessage({ account: client.account, message: `Dearmers-Dao\nAction: submit-proposal\nWallet: ${account.toLowerCase()}\nResource: ${daoId}:${clientKey}` });
+      const response = await fetch("/api/proposals", { method: "POST", headers: { ...(await headers()), "content-type": "application/json" }, body: JSON.stringify({ ...form, daoId, supersedes, clientKey, wallet: account, signature, evidence: form.evidence.split("\n").map((value) => value.trim()).filter(Boolean) }) });
       const body = await response.json(); if (!response.ok) throw new Error(body.error || "Proposal submission failed.");
       onNotice({ tone: body.warning ? "info" : "success", text: body.job?.genlayerTxHash ? "Proposal saved and AI review submitted." : "Proposal saved. Start or recover AI Review from its detail page." });
       navigate(`/dao/${daoId}/proposals/${body.proposal._id}`);
