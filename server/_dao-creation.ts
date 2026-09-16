@@ -13,7 +13,7 @@ export async function reconcileCreation(clientKey: string) {
     const payload = job.payload;
     const registry = String(process.env.DEARMERS_REGISTRY_ADDRESS) as Address;
     const signer = baseSigner(process.env.BASE_PLATFORM_SIGNER_PRIVATE_KEY ? "BASE_PLATFORM_SIGNER_PRIVATE_KEY" : "BASE_AUTOMATION_PRIVATE_KEY");
-    let record = await baseClient().readContract({ address: registry, abi: registryAbi, functionName: "getDAO", args: [job.daoId] }) as { dao: Address; admin: Address; treasury: Address };
+    let record = await baseClient().readContract({ address: registry, abi: registryAbi, functionName: "getDAO", args: [job.daoId] } as never) as { dao: Address; admin: Address; treasury: Address };
     if (!record.dao || /^0x0+$/.test(record.dao)) {
       if (!job.txHash) {
         const executor = baseSigner("BASE_AUTOMATION_PRIVATE_KEY").account.address;
@@ -23,11 +23,11 @@ export async function reconcileCreation(clientKey: string) {
         const gate = payload.gate || {};
         const policy = { version: 0n, activatesAt: 0n, votingPeriod: 259200, maxProposalAmount: 1_000_000_000_000n, weeklySpendLimit: weeklyLimit, quorumBps: 2000, approvalBps: 5000, participationWeightCap: 10, tokenWeightCap: 10, gateToken: gate.asset || "0x0000000000000000000000000000000000000000", gateBalance: 1n, tokenWeightUnit: 0n, categories: String(payload.category || "general"), policyText: payload.constitution, active: false };
         const access = ["private", "whitelist"].includes(payload.access) ? 1 : ["token", "nft"].includes(payload.access) ? 2 : 0;
-        job.txHash = await signer.writeContract({ address: registry, abi: registryAbi, functionName: "createConfiguredDAOFor", args: [job.admin, job.daoId, job.treasury, Number(payload.mode) === 1 ? 1 : 0, oracle, executor, payload.name, payload.metadataUri, policy, access, voteRelayer, weeklyLimit] });
+        job.txHash = await signer.writeContract({ address: registry, abi: registryAbi, functionName: "createConfiguredDAOFor", args: [job.admin, job.daoId, job.treasury, Number(payload.mode) === 1 ? 1 : 0, oracle, executor, payload.name, payload.metadataUri, policy, access, voteRelayer, weeklyLimit] } as never);
         await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { txHash: job.txHash, status: "submitted", updatedAt: new Date() } });
       }
       await confirmed(job.txHash as Hex);
-      record = await baseClient().readContract({ address: registry, abi: registryAbi, functionName: "getDAO", args: [job.daoId] }) as typeof record;
+      record = await baseClient().readContract({ address: registry, abi: registryAbi, functionName: "getDAO", args: [job.daoId] } as never) as typeof record;
     }
     if (!record.dao || /^0x0+$/.test(record.dao) || record.admin.toLowerCase() !== job.admin.toLowerCase() || record.treasury.toLowerCase() !== job.treasury.toLowerCase()) throw new HttpError(409, "Registry identity does not match the creation request.");
     let metadata: Record<string, unknown> = {};

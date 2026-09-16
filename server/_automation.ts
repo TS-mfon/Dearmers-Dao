@@ -115,7 +115,7 @@ export async function reconcileProposalExecution(proposal: Document) {
   if (state.status === 2) {
     if (Number(state.votingEndsAt) > Date.now() / 1000) throw new Error("Voting is still open.");
     const wallet = baseSigner("BASE_AUTOMATION_PRIVATE_KEY");
-    const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "finalizeProposalVote", args: [proposalId] });
+    const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "finalizeProposalVote", args: [proposalId] } as never);
     await confirmed(hash);
     state = await chainProposal(address, proposalId);
   }
@@ -147,7 +147,7 @@ export async function reconcileApplication(limit = 25) {
   const wallet = process.env.BASE_AUTOMATION_PRIVATE_KEY ? baseSigner("BASE_AUTOMATION_PRIVATE_KEY") : null;
   for (const proposal of await db.collection("proposals").find({ onchainProposalId: { $exists: true }, status: { $in: ["active_voting", "passed", "execution_pending", "manual_funding", "tied"] } }).limit(limit).toArray()) await attempt(async () => {
     const state = await chainProposal(proposal.daoAddress as Address, BigInt(proposal.onchainProposalId));
-    if (state.status === 2 && Number(state.votingEndsAt) <= Date.now() / 1000 && wallet) { const hash = await wallet.writeContract({ address: proposal.daoAddress as Address, abi: daoAbi, functionName: "finalizeProposalVote", args: [BigInt(proposal.onchainProposalId)] }); await confirmed(hash); }
+    if (state.status === 2 && Number(state.votingEndsAt) <= Date.now() / 1000 && wallet) { const hash = await wallet.writeContract({ address: proposal.daoAddress as Address, abi: daoAbi, functionName: "finalizeProposalVote", args: [BigInt(proposal.onchainProposalId)] } as never); await confirmed(hash); }
     await syncProposalState(proposal);
     if (wallet) await executeProposal(proposal);
   });

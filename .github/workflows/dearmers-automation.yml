@@ -6,29 +6,13 @@ on:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run automation:reconcile
+      - name: Trigger production reconciliation
+        run: |
+          response="$(curl --fail-with-body --silent --show-error --max-time 55 \
+            -X POST https://dreamersdao.me/api/automation \
+            -H "x-internal-api-key: $INTERNAL_API_SECRET")"
+          node -e 'const result=JSON.parse(process.argv[1]); if (!Array.isArray(result.errors)) process.exit(1); console.log(JSON.stringify({processed: result.processed, errors: result.errors.length, timestamp: result.timestamp})); if (result.errors.length) process.exit(1)' "$response"
         env:
-          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
-          DEARMERS_REGISTRY_ADDRESS: ${{ secrets.DEARMERS_REGISTRY_ADDRESS }}
-          BASE_AUTOMATION_PRIVATE_KEY: ${{ secrets.BASE_AUTOMATION_PRIVATE_KEY }}
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          MONGODB_DB: ${{ secrets.MONGODB_DB }}
-          DELEGATION_ENCRYPTION_KEY: ${{ secrets.DELEGATION_ENCRYPTION_KEY }}
-          ONESHOT_RELAYER_URL: ${{ secrets.ONESHOT_RELAYER_URL }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          GENLAYER_RPC_URL: ${{ secrets.GENLAYER_RPC_URL }}
-          GENLAYER_NETWORK: ${{ secrets.GENLAYER_NETWORK }}
-          GENLAYER_V2_EVALUATOR_ADDRESS: ${{ secrets.GENLAYER_V2_EVALUATOR_ADDRESS }}
-          GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY: ${{ secrets.GENLAYER_PLATFORM_SIGNER_PRIVATE_KEY }}
-          BASE_PLATFORM_SIGNER_PRIVATE_KEY: ${{ secrets.BASE_PLATFORM_SIGNER_PRIVATE_KEY }}
-          BASE_VOTE_RELAYER_PRIVATE_KEY: ${{ secrets.BASE_VOTE_RELAYER_PRIVATE_KEY }}
-          REVIEW_ORACLE_PRIVATE_KEY: ${{ secrets.REVIEW_ORACLE_PRIVATE_KEY }}
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
