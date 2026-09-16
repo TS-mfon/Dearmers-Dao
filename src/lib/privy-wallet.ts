@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCreateWallet, usePrivy, useSignMessage, useSignTypedData, useWallets } from "@privy-io/react-auth";
+import { getEmbeddedConnectedWallet, useCreateWallet, usePrivy, useSignMessage, useSignTypedData, useWallets, type ConnectedWallet } from "@privy-io/react-auth";
 
-type WalletLike = {
-  address: string;
-  chainType?: string;
-  walletClientType?: string;
-  connectorType?: string;
-  imported?: boolean;
-};
+let walletCreation: Promise<unknown> | null = null;
 
-function embeddedEthereumWallet(wallets: WalletLike[]) {
-  return wallets.find((wallet) => wallet.chainType === "ethereum" && ["privy", "privy-v2"].includes(wallet.walletClientType || "") && wallet.connectorType === "embedded" && !wallet.imported);
+function embeddedEthereumWallet(wallets: ConnectedWallet[]) {
+  const embedded = getEmbeddedConnectedWallet(wallets);
+  if (embedded) return embedded;
+  return wallets.find((wallet) => ["privy", "privy-v2"].includes(wallet.walletClientType || "") && !wallet.imported) || null;
+}
+
+function alreadyHasEmbeddedWallet(reason: unknown) {
+  return reason instanceof Error && reason.message.toLowerCase().includes("already has an embedded wallet");
 }
 
 export function usePrivyMemberWallet() {
@@ -22,7 +22,7 @@ export function usePrivyMemberWallet() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const attempted = useRef(false);
-  const wallet = embeddedEthereumWallet(wallets as WalletLike[]);
+  const wallet = embeddedEthereumWallet(wallets);
 
   useEffect(() => {
     if (!authenticated) attempted.current = false;
@@ -33,8 +33,11 @@ export function usePrivyMemberWallet() {
     attempted.current = true;
     setCreating(true);
     setError("");
-    void createWallet()
-      .catch((reason) => setError(reason instanceof Error ? reason.message : "Your Privy wallet could not be created."))
+    walletCreation ||= createWallet().finally(() => { walletCreation = null; });
+    void walletCreation
+      .catch((reason) => {
+        if (!alreadyHasEmbeddedWallet(reason)) setError(reason instanceof Error ? reason.message : "Your Privy wallet could not be created.");
+      })
       .finally(() => setCreating(false));
   }, [authReady, authenticated, createWallet, creating, wallet, walletsReady]);
 
@@ -59,7 +62,7 @@ export function usePrivyMemberWallet() {
     authenticated,
     address: wallet?.address || "",
     creating,
-    error,
+    error: wallet ? "" : error,
     login,
     signMessage,
     signTypedData,
