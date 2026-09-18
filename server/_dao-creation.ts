@@ -40,6 +40,9 @@ export async function reconcileCreation(clientKey: string) {
       if (result.matchedCount) mediaIds[field] = mediaId;
     }
     await db.collection("daoIndex").updateOne({ daoId: job.daoId }, { $setOnInsert: { daoId: job.daoId, dao: record.dao.toLowerCase(), admin: record.admin.toLowerCase(), adminIdentity: job.actor, treasury: record.treasury.toLowerCase(), name: payload.name, mode: Number(payload.mode) || 0, metadata: payload.metadataUri, description: payload.description, mission: payload.mission, constitution: payload.constitution, category: payload.category, access: payload.access || "public", gate: payload.gate, tags: metadata.tags || [], rules: metadata.rules || "", ...mediaIds, active: true, policySyncStatus: "pending", createdAt: new Date() } }, { upsert: true });
+    if (Number(payload.mode) === 1) {
+      await db.collection("grants").updateOne({ grantId: job.daoId }, { $set: { grantId: job.daoId, slug: job.daoId, daoId: job.daoId, name: payload.name, description: payload.description, mission: payload.mission, requirements: payload.constitution, criteria: payload.constitution, status: "open", updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+    }
     await db.collection("daoMembers").updateOne({ daoId: job.daoId, actor: job.actor }, { $setOnInsert: { daoId: job.daoId, actor: job.actor, wallet: job.admin.toLowerCase(), role: "admin", status: "active", joinedAt: new Date() } }, { upsert: true });
     await db.collection("delegations").updateOne({ creationKey: clientKey, actor: job.actor }, { $set: { daoId: job.daoId, daoAddress: record.dao.toLowerCase(), status: "active" } });
     await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { daoAddress: record.dao.toLowerCase(), status: "syncing_policy", error: "", updatedAt: new Date() } });

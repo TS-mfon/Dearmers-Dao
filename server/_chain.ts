@@ -12,6 +12,11 @@ export const baseClient = () => createPublicClient({ chain: baseSepolia, transpo
 export function baseSigner(keyName: string) {
   return createWalletClient({ account: privateKeyToAccount(privateKeyFromEnv(keyName)), chain: baseSepolia, transport: http(process.env.BASE_RPC_URL || "https://sepolia.base.org", { timeout: 12_000 }) });
 }
+export async function requireBaseSignerGas(address: Address, role: string) {
+  const balance = await baseClient().getBalance({ address });
+  if (balance === 0n) throw new HttpError(503, `${role} ${address} has no Base Sepolia ETH for gas. Fund this relayer and retry the operation.`);
+  return balance;
+}
 export type ChainProposal = { proposer: Address; recipient: Address; amount: bigint; kind: number; status: number; votingEndsAt: bigint; yesWeight: bigint; noWeight: bigint; executionHash: Hex; constitutionVersion: bigint };
 export async function chainProposal(address: Address, proposalId: bigint) {
   return await baseClient().readContract({ address, abi: daoAbi, functionName: "getProposal", args: [proposalId] }) as ChainProposal;

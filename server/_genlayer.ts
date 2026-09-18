@@ -22,19 +22,35 @@ export function transactionState(transaction: Record<string, unknown>) {
   const status = String(transaction.statusName || transaction.status || "PENDING").replaceAll("_", "").toUpperCase();
   const execution = String(transaction.txExecutionResultName ?? transaction.txExecutionResult ?? transaction.execution_result ?? "").toUpperCase();
   const finalized = status === "FINALIZED";
+  const disputed = status.includes("UNDETERMINED") || status.includes("APPEAL") || status.includes("DISPUTE");
   const successful = ["FINISHED_WITH_RETURN", "SUCCESS", "1"].includes(execution);
-  const failed = ["CANCELED", "CANCELLED"].includes(status) || (finalized && execution !== "" && !successful);
-  return { status, finalized, successful, failed };
+  const canceled = ["CANCELED", "CANCELLED"].includes(status);
+  const executionFailed = finalized && execution !== "" && !successful;
+  return { status, execution, finalized, successful, failed: canceled || executionFailed, canceled, executionFailed, disputed };
 }
 
 export function normalizeEvaluation(raw: unknown, daoId: string, proposalId: string): Evaluation {
   const value = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
   if (!value || String(value.scope_id ?? value.dao_id) !== daoId || String(value.subject_id ?? value.proposal_id) !== proposalId || !["proposal", "DAO proposal"].includes(String(value.subject_type))) throw new HttpError(422, "GenLayer evaluation identity mismatch.");
   if (!["approve", "reject", "revision", "escalate"].includes(String(value.decision))) throw new HttpError(422, "Unsupported GenLayer decision.");
+  if (value.outcome && !["approved", "rejected", "corrections_required", "further_review"].includes(String(value.outcome))) throw new HttpError(422, "Unsupported GenLayer outcome.");
   return { ...value, decision: String(value.decision), subject_type: "proposal" } as Evaluation;
 }
 
 export async function finalizedEvaluation(daoId: string, proposalId: string, address: `0x${string}`) {
   const raw = await genlayerClient().readContract({ address, functionName: "get_evaluation", args: [daoId, proposalId], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
   return normalizeEvaluation(raw, daoId, proposalId);
+}
+
+export function normalizeGrantEvaluation(raw: unknown, grantId: string, applicationId: string): Evaluation {
+  const value = (typeof raw === "string" ? JSON.parse(raw) : raw) as Record<string, unknown>;
+  if (!value || String(value.scope_id) !== grantId || String(value.subject_id) !== applicationId || String(value.subject_type) !== "grant") throw new HttpError(422, "GenLayer grant evaluation identity mismatch.");
+  if (!["fund", "do_not_fund", "revise", "escalate"].includes(String(value.decision))) throw new HttpError(422, "Unsupported GenLayer grant decision.");
+  if (!['funded', 'rejected', 'corrections_required', 'further_review'].includes(String(value.outcome))) throw new HttpError(422, "Unsupported GenLayer grant outcome.");
+  return { ...value, decision: String(value.decision), subject_type: "grant" } as Evaluation;
+}
+
+export async function finalizedGrantEvaluation(grantId: string, applicationId: string, address: `0x${string}`) {
+  const raw = await genlayerClient().readContract({ address, functionName: "get_grant_evaluation", args: [grantId, applicationId], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
+  return normalizeGrantEvaluation(raw, grantId, applicationId);
 }

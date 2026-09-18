@@ -3,7 +3,7 @@ import type { Document } from "mongodb";
 import { decodeEventLog, encodeFunctionData, hashMessage, parseAbi, type Address, type Hex } from "viem";
 import { getSmartAccountsEnvironment } from "@metamask/smart-accounts-kit";
 import { redelegatePermissionContextAction } from "@metamask/smart-accounts-kit/actions";
-import { baseClient, baseSigner, chainProposal, confirmed, daoAbi } from "./_chain.js";
+import { baseClient, baseSigner, chainProposal, confirmed, daoAbi, requireBaseSignerGas } from "./_chain.js";
 import { database } from "./_db.js";
 import { decrypt, encrypt } from "./_crypto.js";
 import { safeError } from "./_http.js";
@@ -12,6 +12,8 @@ import { syncProposalState } from "./_proposal-state.js";
 import { reconcileCreation } from "./_dao-creation.js";
 import { syncDaoPolicy } from "./_policy.js";
 import { sendEmail } from "./_email.js";
+import { reconcileProposalVotingNotifications } from "./reviews.js";
+import { reconcileGrantApplication } from "./_grant-jobs.js";
 
 const transferAbi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)", "event Transfer(address indexed from, address indexed to, uint256 value)"]);
 type RelayerResult = { requiredPaymentAmount?: string; context?: unknown; taskId?: string; status?: string; error?: string; message?: string; receipt?: { transactionHash?: Hex }; hash?: Hex; txHash?: Hex; targetAddress?: Address; feeCollector?: Address };
@@ -66,6 +68,7 @@ export async function executeProposal(proposal: Document) {
       }
       const current = await chainProposal(address, proposalId);
       if (current.status === 4) {
+        await requireBaseSignerGas(wallet.account.address, "The Base automation relayer");
         if (!job.reservationHash) { const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "reserveProposalExecution", args: [proposalId, executionKey, fee] }); await update({ reservationHash: hash }); }
         await confirmed(job.reservationHash as Hex);
       }
@@ -115,6 +118,7 @@ export async function reconcileProposalExecution(proposal: Document) {
   if (state.status === 2) {
     if (Number(state.votingEndsAt) > Date.now() / 1000) throw new Error("Voting is still open.");
     const wallet = baseSigner("BASE_AUTOMATION_PRIVATE_KEY");
+    await requireBaseSignerGas(wallet.account.address, "The Base automation relayer");
     const hash = await wallet.writeContract({ address, abi: daoAbi, functionName: "finalizeProposalVote", args: [proposalId] } as never);
     await confirmed(hash);
     state = await chainProposal(address, proposalId);
@@ -132,8 +136,12 @@ export async function reconcileApplication(limit = 25) {
   const db = await database(); const errors: string[] = []; let processed = 0;
   const attempt = async (task: () => Promise<unknown>) => { try { await task(); processed++; } catch (error) { errors.push(safeError(error)); } };
   for (const job of await db.collection("daoCreationJobs").find({ status: { $ne: "ready" } }).limit(limit).toArray()) await attempt(() => reconcileCreation(job.clientKey));
+  for (const dao of await db.collection("daoIndex").find({ mode: 1, banned: { $ne: true } }).limit(limit).toArray()) await attempt(async () => {
+    await db.collection("grants").updateOne({ grantId: dao.daoId }, { $set: { grantId: dao.daoId, slug: dao.daoId, daoId: dao.daoId, name: dao.name, description: dao.description, mission: dao.mission, requirements: dao.constitution, criteria: dao.constitution, status: dao.active === false ? "closed" : "open", updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+  });
   for (const dao of await db.collection("daoIndex").find({ policySyncStatus: { $ne: "ready" } }).limit(limit).toArray()) await attempt(() => syncDaoPolicy(dao.daoId));
   for (const proposal of await db.collection("proposals").find({ status: { $in: ["awaiting_ai_review", "evaluating", "approved_for_voting"] } }).limit(limit).toArray()) await attempt(() => reconcileReview(String(proposal._id)));
+  for (const application of await db.collection("grantApplications").find({ status: { $in: ["awaiting_ai_review", "evaluating"] } }).limit(limit).toArray()) await attempt(() => reconcileGrantApplication(String(application._id), true));
   for (const vote of await db.collection("proposalVotes").find({ status: "pending", txHash: { $exists: true } }).limit(limit).toArray()) await attempt(async () => { const receipt = await baseClient().getTransactionReceipt({ hash: vote.txHash as Hex }); await db.collection("proposalVotes").updateOne({ _id: vote._id }, { $set: { status: receipt.status === "success" ? "confirmed" : "failed" } }); });
   for (const email of await db.collection("emailJobs").find({ status: "failed", attempts: { $lt: 4 }, nextAttemptAt: { $lte: new Date() }, recipients: { $type: "array" }, subject: { $type: "string" }, html: { $type: "string" } }).limit(limit).toArray()) await attempt(async () => {
     try {
@@ -146,8 +154,9 @@ export async function reconcileApplication(limit = 25) {
   });
   const wallet = process.env.BASE_AUTOMATION_PRIVATE_KEY ? baseSigner("BASE_AUTOMATION_PRIVATE_KEY") : null;
   for (const proposal of await db.collection("proposals").find({ onchainProposalId: { $exists: true }, status: { $in: ["active_voting", "passed", "execution_pending", "manual_funding", "tied"] } }).limit(limit).toArray()) await attempt(async () => {
+    if (proposal.status === "active_voting") await reconcileProposalVotingNotifications(proposal);
     const state = await chainProposal(proposal.daoAddress as Address, BigInt(proposal.onchainProposalId));
-    if (state.status === 2 && Number(state.votingEndsAt) <= Date.now() / 1000 && wallet) { const hash = await wallet.writeContract({ address: proposal.daoAddress as Address, abi: daoAbi, functionName: "finalizeProposalVote", args: [BigInt(proposal.onchainProposalId)] } as never); await confirmed(hash); }
+    if (state.status === 2 && Number(state.votingEndsAt) <= Date.now() / 1000 && wallet) { await requireBaseSignerGas(wallet.account.address, "The Base automation relayer"); const hash = await wallet.writeContract({ address: proposal.daoAddress as Address, abi: daoAbi, functionName: "finalizeProposalVote", args: [BigInt(proposal.onchainProposalId)] } as never); await confirmed(hash); }
     await syncProposalState(proposal);
     if (wallet) await executeProposal(proposal);
   });

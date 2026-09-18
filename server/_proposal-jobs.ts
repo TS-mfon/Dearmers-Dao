@@ -27,7 +27,9 @@ export async function reconcileReview(proposalId: string, start = false, recover
       if (!/^0x[a-fA-F0-9]{64}$/.test(recoveryHash)) throw new HttpError(400, "Enter a valid GenLayer transaction hash.");
       const transaction = await genlayerClient().getTransaction({ hash: recoveryHash as never });
       if (String(transaction.to_address || transaction.recipient || "").toLowerCase() !== address.toLowerCase()) throw new HttpError(422, "The recovered transaction targets a different contract.");
-      if (!transactionState(transaction as unknown as Record<string, unknown>).finalized) throw new HttpError(409, "Wait for the recovered transaction to finalize before attaching it.");
+      const recoveredState = transactionState(transaction as unknown as Record<string, unknown>);
+      if (recoveredState.disputed) throw new HttpError(409, "The recovered GenLayer transaction is disputed or undetermined and has no relayable verdict.");
+      if (!recoveredState.finalized || !recoveredState.successful) throw new HttpError(409, "Wait for the recovered transaction to finalize successfully before attaching it.");
       await finalizedEvaluation(proposal.daoId, proposalId, address);
       await update({ genlayerTxHash: recoveryHash, status: "submitted", error: "" });
     }
@@ -53,7 +55,7 @@ export async function reconcileReview(proposalId: string, start = false, recover
       await db.collection("proposals").updateOne({ _id: proposal._id }, { $set: { status: "evaluating", updatedAt: new Date() } });
       return;
     }
-    if (job.status === "transaction_failed" && start) {
+    if (["transaction_failed", "evaluation_unavailable"].includes(String(job.status)) && start) {
       const state = transactionState(await genlayerClient().getTransaction({ hash: String(job.genlayerTxHash) as never }) as unknown as Record<string, unknown>);
       if (!state.failed) throw new HttpError(409, "The original transaction has not definitively failed.");
       await db.collection("proposalJobs").updateOne({ proposalId, lease }, { $push: { previousTransactions: job.genlayerTxHash }, $unset: { genlayerTxHash: "", explorerUrl: "" }, $set: { status: "queued", error: "" } });
@@ -63,7 +65,9 @@ export async function reconcileReview(proposalId: string, start = false, recover
     const transaction = await genlayerClient().getTransaction({ hash: String(job.genlayerTxHash) as never });
     const state = transactionState(transaction as unknown as Record<string, unknown>);
     await update({ genlayerStatus: state.status });
-    if (state.failed) { await update({ status: "transaction_failed", error: "GenLayer reports a failed or canceled transaction. Retry safely to queue another attempt." }); return; }
+    if (state.disputed) { await update({ status: "consensus_disputed", error: "GenLayer consensus is undetermined or disputed. No Base review transaction will be submitted until a valid finalized verdict exists." }); return; }
+    if (state.executionFailed) { await update({ status: "evaluation_unavailable", error: "GenLayer finalized the transaction, but contract execution did not produce a valid evaluation. Retry only after checking the contract and input parameters." }); return; }
+    if (state.canceled) { await update({ status: "transaction_failed", error: "GenLayer reports a canceled transaction. Retry safely to queue another attempt." }); return; }
     if (!state.finalized) { await update({ status: "evaluating", error: "" }); return; }
     if (!state.successful) throw new HttpError(409, "Finality was reported without a successful execution result. Waiting for a verifiable receipt.");
     const evaluation = await finalizedEvaluation(proposal.daoId, proposalId, address);

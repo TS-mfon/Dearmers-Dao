@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { Address } from "viem";
 import { ProposalReview, type ProposalResponse } from "../components/ProposalReview";
@@ -7,26 +7,35 @@ import type { DaoRecord } from "../lib/dao";
 import { usePrivyMemberWallet } from "../lib/privy-wallet";
 
 type Props = { daos: DaoRecord[]; account: Address | ""; onNotice: (notice: { tone: "info" | "success" | "error"; text: string }) => void };
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => { timer = window.setTimeout(() => reject(new Error(message)), timeoutMs); });
+  return Promise.race([promise, timeout]).finally(() => { if (timer !== undefined) window.clearTimeout(timer); });
+}
 export function CreateProposalRoute({ onNotice }: Props) {
   const { daoId } = useParams(); const [search] = useSearchParams(); const navigate = useNavigate(); const headers = useSessionHeaders(); const memberWallet = usePrivyMemberWallet();
   const [form, setForm] = useState({ title: "", description: "", amount: "0", recipient: "", category: "general", evidence: "" });
-  const [clientKey] = useState(() => crypto.randomUUID()); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const [clientKey] = useState(() => crypto.randomUUID()); const [saving, setSaving] = useState(false); const [phase, setPhase] = useState(""); const [error, setError] = useState(""); const submissionLock = useRef(false);
   const supersedes = search.get("supersedes") || undefined;
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (!memberWallet.authenticated) return memberWallet.login();
+    event.preventDefault(); if (!memberWallet.authenticated) return memberWallet.login(); if (submissionLock.current) return;
+    submissionLock.current = true;
     setSaving(true); setError("");
     try {
       const wallet = memberWallet.address;
       if (!wallet) throw new Error(memberWallet.error || "Your Privy embedded wallet is not ready.");
-      const signature = await memberWallet.signMessage(`Dearmers-Dao\nAction: submit-proposal\nWallet: ${wallet.toLowerCase()}\nResource: ${daoId}:${clientKey}`);
+      setPhase("Open the Privy window and approve the proposal signature.");
+      const signature = await withTimeout(memberWallet.signMessage(`Dearmers-Dao\nAction: submit-proposal\nWallet: ${wallet.toLowerCase()}\nResource: ${daoId}:${clientKey}`), 90_000, "Privy signing timed out. Your proposal was not duplicated; retry with the same form.");
+      setPhase("Saving your signed proposal.");
       const response = await fetch("/api/proposals", { method: "POST", headers: { ...(await headers()), "content-type": "application/json" }, body: JSON.stringify({ ...form, daoId, supersedes, clientKey, wallet, signature, evidence: form.evidence.split("\n").map((value) => value.trim()).filter(Boolean) }) });
       const body = await response.json(); if (!response.ok) throw new Error(body.error || "Proposal submission failed.");
+      setPhase("Proposal saved. Opening its review status.");
       onNotice({ tone: body.warning ? "info" : "success", text: body.job?.genlayerTxHash ? "Proposal saved and AI review submitted." : "Proposal saved. Start or recover AI Review from its detail page." });
       navigate(`/dao/${daoId}/proposals/${body.proposal._id}`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Proposal submission failed."); }
-    finally { setSaving(false); }
+    finally { submissionLock.current = false; setSaving(false); setPhase(""); }
   };
-  return <div className="route-page narrow-route"><Link className="back-link" to={`/dao/${daoId}/proposals`}>← DAO proposals</Link><h1>{supersedes ? "Revise your proposal" : "Create a proposal"}</h1><p className="route-lede">Save your proposal with your Privy wallet and start an independent GenLayer review. Member voting opens only after finalized approval.</p>{supersedes && <p className="notice">This creates a new proposal linked to the original; its evidence and review remain unchanged. <Link to={`/dao/${daoId}/proposals/${supersedes}`}>Read the original review →</Link></p>}{memberWallet.authenticated && <p className="notice">Member wallet: {memberWallet.address ? `${memberWallet.address.slice(0, 8)}…${memberWallet.address.slice(-6)}` : memberWallet.creating ? "Creating your Privy wallet…" : "Privy wallet unavailable"}</p>}<form className="stack" onSubmit={submit}><label>Title<input required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label>What should the DAO resolve?<textarea required rows={7} maxLength={10000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label>Requested USDC<input type="number" min="0" step="0.000001" required value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /><small>Use 0 for a non-spending governance decision.</small></label>{Number(form.amount) > 0 && <label>Recipient wallet<input required value={form.recipient} onChange={(event) => setForm({ ...form, recipient: event.target.value })} placeholder="0x…" /></label>}<label>Evidence links <small>HTTPS only, one URL per line</small><textarea rows={4} value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} /></label>{(error || memberWallet.error) && <p className="notice error" role="alert">{error || memberWallet.error}</p>}<button className="primary-button" disabled={saving || memberWallet.creating}>{saving ? "Saving and requesting review…" : memberWallet.authenticated ? "Submit proposal" : "Sign in to submit"}</button></form></div>;
+  return <div className="route-page narrow-route"><Link className="back-link" to={`/dao/${daoId}/proposals`}>← DAO proposals</Link><h1>{supersedes ? "Revise your proposal" : "Create a proposal"}</h1><p className="route-lede">Save your proposal with your Privy wallet and start an independent GenLayer review. Member voting opens only after finalized approval.</p>{supersedes && <p className="notice">This creates a new proposal linked to the original; its evidence and review remain unchanged. <Link to={`/dao/${daoId}/proposals/${supersedes}`}>Read the original review →</Link></p>}{memberWallet.authenticated && <p className="notice">Member wallet: {memberWallet.address ? `${memberWallet.address.slice(0, 8)}…${memberWallet.address.slice(-6)}` : memberWallet.creating ? "Creating your Privy wallet…" : "Privy wallet unavailable"}</p>}<form className="stack" onSubmit={submit}><label>Title<input required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label>What should the DAO resolve?<textarea required rows={7} maxLength={10000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label>Requested USDC<input type="number" min="0" step="0.000001" required value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /><small>Use 0 for a non-spending governance decision.</small></label>{Number(form.amount) > 0 && <label>Recipient wallet<input required value={form.recipient} onChange={(event) => setForm({ ...form, recipient: event.target.value })} placeholder="0x…" /></label>}<label>Evidence links <small>HTTPS only, one URL per line</small><textarea rows={4} value={form.evidence} onChange={(event) => setForm({ ...form, evidence: event.target.value })} /></label>{phase && <p className="notice" role="status">{phase}</p>}{(error || memberWallet.error) && <p className="notice error" role="alert">{error || memberWallet.error}</p>}<button className="primary-button" disabled={saving || memberWallet.creating}>{saving ? phase || "Saving proposal…" : memberWallet.authenticated ? "Submit proposal" : "Sign in to submit"}</button></form></div>;
 }
 
 export function ProposalDetailRoute({ onNotice }: Props) {

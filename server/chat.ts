@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const before = req.query.before ? new Date(String(req.query.before)) : new Date();
       const messages = await db.collection("chatMessages").find({ daoId, createdAt: { $lt: before } }).sort({ createdAt: -1 }).limit(50).toArray();
       const actors = [...new Set(messages.map((message) => String(message.actor || "")).filter(Boolean))];
-      const profiles = await db.collection("profiles").find({ $or: actors.flatMap((actor) => [{ identity: actor }, { identity: `privy:${actor}` }]) }).project({ _id: 0, identity: 1, username: 1, displayName: 1, avatarUrl: 1 }).toArray();
+      const profiles = actors.length ? await db.collection("profiles").find({ $or: actors.flatMap((actor) => [{ identity: actor }, { identity: `privy:${actor}` }]) }).project({ _id: 0, identity: 1, username: 1, displayName: 1, avatarUrl: 1 }).toArray() : [];
       const profileByIdentity = new Map(profiles.map((item) => [String(item.identity), item]));
       return json(res, 200, { messages: messages.reverse().map((message) => { const actor = String(message.actor || ""); const author = profileByIdentity.get(actor) || profileByIdentity.get(`privy:${actor}`); const label = String(author?.displayName || author?.username || message.wallet || "DAO member"); return { ...message, actor: label, actorId: actor, author: author ? { username: author.username || "", displayName: author.displayName || "", avatarUrl: author.avatarUrl || "" } : null }; }) });
     }

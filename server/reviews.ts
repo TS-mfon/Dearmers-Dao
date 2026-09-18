@@ -2,10 +2,42 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { ObjectId, type Document } from "mongodb";
 import { hashMessage, isAddress, type Address, type Hex } from "viem";
 import type { Evaluation } from "../shared/proposals.js";
-import { baseClient, baseSigner, chainProposal, confirmed, daoAbi } from "./_chain.js";
+import { baseClient, baseSigner, chainProposal, confirmed, daoAbi, requireBaseSignerGas } from "./_chain.js";
 import { database } from "./_db.js";
 import { errorResponse, HttpError, json, method } from "./_http.js";
 import { escapeHtml, sendEmail } from "./_email.js";
+
+export async function reconcileProposalVotingNotifications(proposal: Document) {
+  const db = await database();
+  const proposalId = String(proposal._id);
+  const eventKey = `proposal-live:${proposalId}`;
+  await db.collection("auditLogs").updateOne({ eventKey }, { $setOnInsert: { eventKey, scopeId: proposal.daoId, type: "proposal_voting_opened", proposalId, createdAt: new Date() } }, { upsert: true });
+  const [members, dao] = await Promise.all([
+    db.collection("daoMembers").find({ daoId: proposal.daoId, status: "active", actor: { $type: "string" } }).project({ actor: 1 }).toArray(),
+    db.collection("daoIndex").findOne({ daoId: proposal.daoId }, { projection: { adminIdentity: 1 } }),
+  ]);
+  const identities = [...new Set([...members.map((member) => String(member.actor || "")), String(dao?.adminIdentity || "")].filter(Boolean))];
+  await Promise.all(identities.map((identity) => db.collection("notifications").updateOne(
+    { eventKey, identity },
+    { $setOnInsert: { eventKey, identity, kind: "proposal_live", title: "Member voting is open", body: proposal.title, targetUrl: `/dao/${proposal.daoId}/proposals/${proposalId}`, readAt: null, createdAt: new Date() } },
+    { upsert: true },
+  )));
+  if (!identities.length) return;
+  const profileIdentities = identities.map((identity) => identity.startsWith("privy:") ? identity : `privy:${identity}`);
+  const profiles = await db.collection("profiles").find({ identity: { $in: profileIdentities }, email: { $type: "string" }, emailNotifications: { $ne: false } }).project({ email: 1 }).toArray();
+  const recipients = [...new Set(profiles.map((profile) => String(profile.email || "").trim().toLowerCase()).filter(Boolean))];
+  if (!recipients.length) return;
+  const subject = `Voting is open: ${proposal.title}`;
+  const html = `<h1>${escapeHtml(String(proposal.title || "Proposal"))}</h1><p>GenLayer approved this proposal for member voting. Sign in to Dreamers DAO to review the verdict and vote before the deadline.</p>`;
+  const claimed = await db.collection("emailJobs").updateOne({ eventKey }, { $setOnInsert: { eventKey, kind: "proposal_live", recipients, subject, html, status: "sending", attempts: 0, createdAt: new Date(), updatedAt: new Date() } }, { upsert: true });
+  if (!claimed.upsertedCount) return;
+  try {
+    const delivery = await sendEmail({ to: recipients, subject, html, eventKey });
+    await db.collection("emailJobs").updateOne({ eventKey }, { $set: { status: "sent", providerId: delivery.id, sent: delivery.sent, attempts: 1, updatedAt: new Date() } });
+  } catch (error) {
+    await db.collection("emailJobs").updateOne({ eventKey }, { $set: { status: "failed", error: error instanceof Error ? error.message.slice(0, 300) : "Email delivery failed.", attempts: 1, nextAttemptAt: new Date(Date.now() + 5 * 60_000), updatedAt: new Date() } });
+  }
+}
 
 export async function relayReview(proposal: Document, job: Document, evaluation: Evaluation) {
   const db = await database();
@@ -14,7 +46,7 @@ export async function relayReview(proposal: Document, job: Document, evaluation:
   const address = String(proposal.daoAddress || job.daoAddress) as Address;
   const setJob = async (values: Document) => { await db.collection("proposalJobs").updateOne({ proposalId }, { $set: { ...values, updatedAt: new Date() } }); };
   if (evaluation.decision !== "approve") {
-    const status = evaluation.decision === "reject" ? "rejected_by_genlayer" : evaluation.decision === "revision" ? "corrections_required" : "escalated";
+    const status = evaluation.outcome === "corrections_required" || evaluation.decision === "revision" ? "corrections_required" : evaluation.outcome === "further_review" || evaluation.decision === "escalate" ? "escalated" : "rejected_by_genlayer";
     await db.collection("proposals").updateOne(query, { $set: { status, evaluation, genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } });
     await setJob({ status: "complete", error: "" });
     return;
@@ -22,6 +54,7 @@ export async function relayReview(proposal: Document, job: Document, evaluation:
   await db.collection("proposals").updateOne(query, { $set: { status: "approved_for_voting", evaluation, updatedAt: new Date() } });
   if (!isAddress(String(proposal.wallet || "")) || !isAddress(address)) throw new HttpError(409, "A verified proposer wallet and DAO address are required before voting can open.");
   const wallet = baseSigner("REVIEW_ORACLE_PRIVATE_KEY");
+  await requireBaseSignerGas(wallet.account.address, "The Base review oracle");
   const key = hashMessage(`${proposal.daoId}:${proposalId}`);
   let supportsIdempotentKeys = true;
   let storedId = 0n;
@@ -64,27 +97,7 @@ export async function relayReview(proposal: Document, job: Document, evaluation:
   if (state.status !== 2) throw new HttpError(409, "The DAO contract has not opened voting for this review.");
   await db.collection("proposals").updateOne(query, { $set: { status: "active_voting", evaluation, genlayerTxHash: job.genlayerTxHash, reviewTxHash: job.reviewTxHash, votingEndsAt: new Date(Number(state.votingEndsAt) * 1000), updatedAt: new Date() } });
   await setJob({ status: "complete", error: "" });
-  const eventKey = `proposal-live:${proposalId}`;
-  const event = await db.collection("auditLogs").updateOne({ eventKey }, { $setOnInsert: { eventKey, scopeId: proposal.daoId, type: "proposal_voting_opened", proposalId, createdAt: new Date() } }, { upsert: true });
-  if (event.upsertedCount) {
-    const members = await db.collection("daoMembers").find({ daoId: proposal.daoId, status: "active" }).toArray();
-    await Promise.all(members.filter((member) => member.actor).map((member) => db.collection("notifications").updateOne(
-      { eventKey, identity: member.actor },
-      { $setOnInsert: { eventKey, identity: member.actor, kind: "proposal_live", title: "Member voting is open", body: proposal.title, targetUrl: `/dao/${proposal.daoId}/proposals/${proposalId}`, readAt: null, createdAt: new Date() } },
-      { upsert: true },
-    )));
-    const identities = members.map((member) => member.actor).filter(Boolean);
-    const profiles = identities.length ? await db.collection("profiles").find({ identity: { $in: identities.map((identity) => `privy:${identity}`) }, email: { $type: "string" }, emailNotifications: { $ne: false } }).project({ email: 1 }).toArray() : [];
-    const recipients = profiles.map((profile) => String(profile.email || "")).filter(Boolean);
-    if (recipients.length) {
-      try {
-        const delivery = await sendEmail({ to: recipients, subject: `Voting is open: ${proposal.title}`, html: `<h1>${escapeHtml(proposal.title)}</h1><p>GenLayer approved this proposal for member voting. Sign in to Dreamers DAO to review the verdict and vote before the deadline.</p>`, eventKey });
-        await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, kind: "proposal_live", recipients, status: "sent", providerId: delivery.id, sent: delivery.sent, attempts: 1, updatedAt: new Date() } }, { upsert: true });
-      } catch (error) {
-        await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, kind: "proposal_live", recipients, subject: `Voting is open: ${proposal.title}`, html: `<h1>${escapeHtml(proposal.title)}</h1><p>GenLayer approved this proposal for member voting. Sign in to Dreamers DAO to vote.</p>`, status: "failed", error: error instanceof Error ? error.message.slice(0, 300) : "Email delivery failed.", attempts: 1, nextAttemptAt: new Date(Date.now() + 5 * 60_000), updatedAt: new Date() } }, { upsert: true });
-      }
-    }
-  }
+  await reconcileProposalVotingNotifications({ ...proposal, _id: query._id });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

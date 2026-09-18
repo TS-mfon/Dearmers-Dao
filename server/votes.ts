@@ -5,7 +5,7 @@ import { database } from "./_db.js";
 import { HttpError, errorResponse, json, method, safeError } from "./_http.js";
 import { requirePrivyIdentity, verifiedEmbeddedWallet } from "./_privy.js";
 import { findDaoForIdentity } from "./dao-auth.js";
-import { baseClient, baseSigner, chainProposal, confirmed, daoAbi } from "./_chain.js";
+import { baseClient, baseSigner, chainProposal, confirmed, daoAbi, requireBaseSignerGas } from "./_chain.js";
 import { syncProposalState } from "./_proposal-state.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -30,6 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!valid) throw new HttpError(401, "Invalid vote signature.");
     if (await db.collection("proposalVotes").findOne({ proposalId, wallet: voter })) throw new HttpError(409, "This wallet already has a submitted vote. Check its transaction status.");
     const signer = baseSigner(process.env.BASE_VOTE_RELAYER_PRIVATE_KEY ? "BASE_VOTE_RELAYER_PRIVATE_KEY" : "BASE_AUTOMATION_PRIVATE_KEY");
+    await requireBaseSignerGas(signer.account.address, "The Base vote relayer");
     const registered = await baseClient().readContract({ address, abi: daoAbi, functionName: "registeredMembers", args: [voter] });
     if (!registered) { const memberHash = await signer.writeContract({ address, abi: daoAbi, functionName: "syncMemberFor", args: [voter, true] }); await confirmed(memberHash); }
     const inserted = await db.collection("proposalVotes").insertOne({ proposalId, daoId: proposal.daoId, actor: identity.sub, wallet: voter, support: body.support, status: "submitting", createdAt: new Date() });

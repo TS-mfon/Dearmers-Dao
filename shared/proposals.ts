@@ -1,4 +1,5 @@
-export type Evaluation = { decision: string; score?: number; reasoning?: string; critique?: string; evidence_report?: string; corrections?: string; uncertainty?: string; rules_version?: string; scope_id?: string; subject_id?: string; subject_type?: string };
+export type EvidenceFinding = { url?: string; retrieved?: boolean; status?: number; title?: string; description?: string; excerpt?: string; limitations?: string };
+export type Evaluation = { decision: string; outcome?: string; score?: number; fit_score?: number; risk?: number; reasoning?: string; critique?: string; evidence_report?: string; corrections?: string; weak_spots?: string; improvements?: string; uncertainty?: string; rules_version?: string; scope_id?: string; subject_id?: string; subject_type?: string };
 export type ReviewJob = { status: string; genlayerTxHash?: string; genlayerStatus?: string; explorerUrl?: string; error?: string; updatedAt?: string; reviewTxHash?: string };
 export type ExecutionJob = { status: string; error?: string; paymentHash?: string; taskId?: string; updatedAt?: string };
 export type ReviewCapabilities = { canStart: boolean; canRetry: boolean; canRefresh: boolean; canRecover: boolean; canReplace: boolean; canReconcileExecution?: boolean };
@@ -11,7 +12,7 @@ export function reviewCapabilities(status: string, job: ReviewJob | null, author
   const noHash = !job?.genlayerTxHash;
   return {
     canStart: pending && noHash && !uncertain && job?.status !== "submitting",
-    canRetry: pending && Boolean(job?.genlayerTxHash) && ["relay_failed", "failed", "transaction_failed"].includes(job?.status || ""),
+    canRetry: pending && Boolean(job?.genlayerTxHash) && ["relay_failed", "failed", "transaction_failed", "evaluation_unavailable"].includes(job?.status || ""),
     canRefresh: pending && Boolean(job?.genlayerTxHash),
     canRecover: pending && noHash && uncertain,
     canReplace: authorized && ["corrections_required", "rejected_by_genlayer", "escalated"].includes(status),
@@ -23,7 +24,9 @@ export function reviewLabel(status: string, job: ReviewJob | null) {
   if (!job?.genlayerTxHash && job?.error?.includes("GenLayer")) return "GenLayer policy synchronization pending";
   if (!job?.genlayerTxHash && job?.error?.includes("active constitution")) return "Base governance requires DAO setup";
   if (job?.status === "submission_unknown" || job?.status === "broadcasting") return "Confirming submission";
-  if (job?.status === "transaction_failed") return "Review transaction failed";
+  if (job?.status === "transaction_failed") return "Review transaction canceled";
+  if (job?.status === "evaluation_unavailable") return "Finalized · evaluation execution failed";
+  if (job?.status === "consensus_disputed") return "Consensus disputed";
   if (job?.status === "relay_failed" || status === "approved_for_voting") return "Consensus reached · completing voting setup";
   if (job?.genlayerStatus?.includes("APPEAL") || job?.genlayerStatus === "UNDETERMINED") return "Consensus disputed";
   if (job?.genlayerStatus === "ACCEPTED") return "Consensus reached · awaiting finality";

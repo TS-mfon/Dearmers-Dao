@@ -14,6 +14,32 @@ export type Eip1193Provider = {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 };
 
+let delegationRequest: Promise<unknown> | null = null;
+
+function errorRecord(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const value = error as Error & { code?: unknown; data?: unknown; cause?: unknown };
+    return { message: value.message, code: value.code, data: value.data, cause: value.cause };
+  }
+  return error && typeof error === "object" ? error as Record<string, unknown> : { message: String(error || "Unknown wallet error") };
+}
+
+export function walletErrorMessage(error: unknown) {
+  const seen = new Set<unknown>();
+  const messages: string[] = [];
+  const visit = (value: unknown, depth = 0) => {
+    if (depth > 4 || value === null || value === undefined || seen.has(value)) return;
+    if (typeof value === "string" || typeof value === "number") { messages.push(String(value)); return; }
+    if (typeof value !== "object") return;
+    seen.add(value);
+    const record = errorRecord(value);
+    for (const key of ["message", "shortMessage", "details", "reason", "code"]) if (record[key] !== undefined) visit(record[key], depth + 1);
+    for (const key of ["data", "cause", "error"]) if (record[key] !== undefined) visit(record[key], depth + 1);
+  };
+  visit(error);
+  return [...new Set(messages.map((message) => message.trim()).filter((message) => message && message !== "[object Object]"))].join(" · ") || "MetaMask returned an unreadable provider error.";
+}
+
 function walletProviders(): Eip1193Provider[] {
   const injected = (window as unknown as { ethereum?: Eip1193Provider }).ethereum;
   if (!injected) return [];
@@ -36,13 +62,14 @@ export async function assertDelegationSupport(provider: Eip1193Provider) {
     const supported = await provider.request({ method: "wallet_getSupportedExecutionPermissions", params: [] });
     if (!supported || typeof supported !== "object" || Object.keys(supported as object).length === 0) throw new Error("MetaMask returned no supported execution permission types.");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = walletErrorMessage(error);
     if (message.includes("does not exist") || message.includes("not available") || message.includes("has no corresponding handler")) throw new Error("Your MetaMask version does not support ERC-7715 delegations. Update MetaMask, unlock it, and retry.", { cause: error });
     throw new Error(`MetaMask cannot create ERC-7715 delegations: ${message}`, { cause: error });
   }
 }
 
 export async function requestDelegationPermissions(treasuryAddress: Address, limitAmount: bigint, delegateAddress: Address = executorAddress) {
+  if (delegationRequest) return delegationRequest;
   const ethereum = selectMetaMask();
   if (!delegateAddress) throw new Error("VITE_DEARMERS_EXECUTOR_ADDRESS is not configured.");
   if (limitAmount <= 0n) throw new Error("The weekly delegation limit must be greater than zero.");
@@ -50,18 +77,19 @@ export async function requestDelegationPermissions(treasuryAddress: Address, lim
   await assertDelegationSupport(ethereum);
   const wallet = createWalletClient({ chain: baseSepolia, transport: custom(ethereum as never) }).extend(erc7715ProviderActions());
   const currentTime = Math.floor(Date.now() / 1000);
-  try {
-    return await wallet.requestExecutionPermissions([{
+  delegationRequest = wallet.requestExecutionPermissions([{
       from: treasuryAddress,
       chainId: baseSepolia.id,
       expiry: currentTime + 365 * 24 * 60 * 60,
       to: delegateAddress,
       permission: { type: "erc20-token-periodic", isAdjustmentAllowed: false, data: { tokenAddress: USDC_BASE_SEPOLIA, periodAmount: limitAmount, periodDuration: 7 * 24 * 60 * 60, startTime: currentTime } } as never,
     }]);
+  try {
+    return await delegationRequest;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = walletErrorMessage(error);
     if (message.includes("User rejected") || message.includes("rejected")) throw new Error("The MetaMask delegation request was cancelled.", { cause: error });
     if (message.includes("does not exist") || message.includes("not available") || message.includes("has no corresponding handler")) throw new Error("MetaMask did not expose ERC-7715 delegation support. Update MetaMask and ensure the MetaMask extension is the selected wallet.", { cause: error });
     throw new Error(`MetaMask delegation request failed: ${message}`, { cause: error });
-  }
+  } finally { delegationRequest = null; }
 }

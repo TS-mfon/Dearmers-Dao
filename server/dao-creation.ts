@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (body.action === "resume") throw new HttpError(404, "Creation job not found.");
       const name = String(body.name || "").trim(); const treasury = String(body.treasury || "").toLowerCase();
       if (!name || name.length > 100 || !isAddress(treasury) || !body.constitution || !body.mission || !/^\d+(\.\d{1,6})?$/.test(String(body.weeklyLimit))) throw new HttpError(400, "Complete the DAO identity, constitution, treasury, and weekly limit.");
-      const delegation = await db.collection("delegations").findOne({ creationKey: clientKey, actor: identity.sub, treasury });
+      const delegation = await db.collection("delegations").findOne({ creationKey: clientKey, actor: identity.sub, treasury, status: "ready_for_creation" });
       if (!delegation) throw new HttpError(409, "Record a fresh treasury delegation before creating the DAO.");
       const admin = String(delegation.treasury || treasury).toLowerCase();
       if (!isAddress(admin) || admin !== treasury) throw new HttpError(409, "The treasury delegation does not match the DAO administrator wallet.");

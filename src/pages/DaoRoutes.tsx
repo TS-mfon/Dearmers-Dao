@@ -1,15 +1,17 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Clock3, MessageCircle, Send, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Clock3, ExternalLink, MessageCircle, Send, ShieldCheck, Users } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import type { Address } from "viem";
 import { getDao, normalizeDaoRecord, type DaoRecord } from "../lib/dao";
 import { useSessionHeaders } from "../lib/session";
 import { usePrivyMemberWallet } from "../lib/privy-wallet";
+import type { Evaluation, ReviewJob } from "../../shared/proposals";
 
 type Notice = { tone: "info" | "success" | "error"; text: string };
 type Props = { daos: DaoRecord[]; account: Address | ""; onNotice: (notice: Notice) => void };
 type Proposal = { _id?: string; proposalId?: string; daoId: string; title: string; description: string; status: string; amount?: string; category?: string; createdAt?: string; votingEndsAt?: string; daoAddress?: string; onchainProposalId?: string; evaluation?: { decision?: string; score?: number; critique?: string } | null };
+type GrantApplication = { _id?: string; status: string; projectName: string; description: string; evaluation?: Evaluation | null; genlayerTxHash?: string };
 
 function useDao(daos: DaoRecord[]) {
   const { daoId } = useParams();
@@ -63,4 +65,40 @@ export function DaoMembersRoute({ daos }: Props) { const { dao, loading: daoLoad
 
 export function GrantExplorerRoute() { const [grants, setGrants] = useState<Array<{ grantId: string; name?: string; description?: string }>>([]); useEffect(() => { fetch("/api/grants").then((response) => response.json()).then((body) => setGrants(body.grants || [])); }, []); return <div className="route-page"><span className="eyebrow">GRANT ASSEMBLY</span><h1>Capital for work<br /><em>worth verifying.</em></h1><p className="route-lede">Separate from DAOs. No access modes. No onchain fund transfers. Just rigorous applications and GenLayer review.</p><div className="route-card-grid">{!grants.length ? <p className="empty">No open grant programs yet.</p> : grants.map((grant) => <Link className="route-card" key={grant.grantId} to={`/grants/${grant.grantId}`}><span className="status status-2">Open</span><h3>{grant.name || grant.grantId}</h3><p>{grant.description}</p></Link>)}</div></div> }
 export function GrantDetailRoute() { const { grantId } = useParams(); return <div className="route-page"><Link className="back-link" to="/grants"><ArrowLeft size={15} /> Grant explorer</Link><span className="eyebrow">GRANT PROGRAM</span><h1>Application dossier</h1><p className="route-lede">Every submission is unverified until GenLayer checks it against the host mission, constitution, standards, and requirements.</p><Link className="primary-button" to={`/grants/${grantId}/apply`}>Apply to this grant <ArrowRight size={15} /></Link></div> }
-export function GrantApplyRoute({ onNotice }: { onNotice: (notice: Notice) => void }) { const { grantId } = useParams(); const headers = useSessionHeaders(); const [form, setForm] = useState({ projectName: "", description: "", links: "" }); const submit = async (event: FormEvent) => { event.preventDefault(); try { const auth = await headers(); const response = await fetch("/api/grants", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ grantId, ...form, links: form.links.split("\n").filter(Boolean) }) }); const body = await response.json(); if (!response.ok) throw new Error(body.error); onNotice({ tone: "success", text: "Application submitted for GenLayer review." }); } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Application failed." }); } }; return <div className="route-page narrow-route"><Link className="back-link" to={`/grants/${grantId}`}><ArrowLeft size={15} /> Grant</Link><span className="eyebrow">SUBMIT EVIDENCE</span><h1>Your work, examined fairly.</h1><form className="stack" onSubmit={submit}><label>Project name<input required value={form.projectName} onChange={(event) => setForm({ ...form, projectName: event.target.value })} /></label><label>Project description<textarea required rows={8} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label>Links and repositories<textarea rows={5} value={form.links} onChange={(event) => setForm({ ...form, links: event.target.value })} /></label><button className="primary-button">Submit application <Send size={14} /></button></form></div> }
+export function GrantApplyRoute({ onNotice }: { onNotice: (notice: Notice) => void }) {
+  const { grantId } = useParams();
+  const headers = useSessionHeaders();
+  const [form, setForm] = useState({ projectName: "", description: "", requestedAmount: "", milestones: "", team: "", links: "" });
+  const [application, setApplication] = useState<GrantApplication | null>(null);
+  const [job, setJob] = useState<ReviewJob | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    const response = await fetch(`/api/grants?grantId=${encodeURIComponent(String(grantId || ""))}&mine=1`, { headers: await headers() });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Grant review status is unavailable.");
+    setApplication(body.application || null);
+    setJob(body.job || null);
+  }, [grantId, headers]);
+  useEffect(() => { void load().catch(() => undefined); }, [load]);
+  useEffect(() => {
+    if (!application || !["awaiting_ai_review", "evaluating"].includes(application.status)) return;
+    const timer = window.setInterval(() => { if (!document.hidden) void load().catch(() => undefined); }, 8000);
+    return () => window.clearInterval(timer);
+  }, [application, load]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      setBusy(true);
+      const auth = await headers();
+      const response = await fetch("/api/grants", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ grantId, ...form, links: form.links.split("\n").map((value) => value.trim()).filter(Boolean) }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Application failed.");
+      setApplication(body.application);
+      setJob(body.job || null);
+      onNotice({ tone: body.warning ? "info" : "success", text: body.warning || "Application submitted for GenLayer review." });
+    } catch (error) { onNotice({ tone: "error", text: error instanceof Error ? error.message : "Application failed." }); }
+    finally { setBusy(false); }
+  };
+  const evaluation = application?.evaluation;
+  return <div className="route-page narrow-route"><Link className="back-link" to={`/grants/${grantId}`}><ArrowLeft size={15} /> Grant</Link><span className="eyebrow">SUBMIT EVIDENCE</span><h1>Your work, examined fairly.</h1>{application ? <section className="evaluation-panel"><span className="eyebrow"><ShieldCheck size={14} /> GRANT REVIEW</span><h3>{application.status.replaceAll("_", " ")}</h3><p>{evaluation?.reasoning || "Every claim remains unverified while GenLayer evaluates the application against the grant requirements."}</p>{job?.error && <p className="notice error">{job.error}</p>}{job?.genlayerTxHash && <a href={job.explorerUrl || `https://explorer-studio-dev.genlayer.com/tx/${job.genlayerTxHash}`} target="_blank" rel="noreferrer">GenLayer transaction <ExternalLink size={13} /></a>}{evaluation && <div className="review-evidence"><div className="evaluation-metrics"><span>Recommendation <strong>{evaluation.outcome?.replaceAll("_", " ") || evaluation.decision}</strong></span>{evaluation.score !== undefined && <span>Score <strong>{evaluation.score}/100</strong></span>}{evaluation.fit_score !== undefined && <span>Fit <strong>{evaluation.fit_score}/100</strong></span>}{evaluation.risk !== undefined && <span>Risk <strong>{evaluation.risk}/100</strong></span>}</div>{evaluation.weak_spots && <section><h4>Weak spots</h4><p className="preserve-lines">{evaluation.weak_spots}</p></section>}{evaluation.corrections && <section><h4>Required corrections</h4><p className="preserve-lines">{evaluation.corrections}</p></section>}{evaluation.improvements && <section><h4>Suggested improvements</h4><p className="preserve-lines">{evaluation.improvements}</p></section>}{evaluation.uncertainty && <section><h4>Uncertainty</h4><p className="preserve-lines">{evaluation.uncertainty}</p></section>}<p className="hint">A funding recommendation does not automatically transfer grant funds.</p></div>}</section> : <form className="stack" onSubmit={submit}><label>Project name<input required value={form.projectName} onChange={(event) => setForm({ ...form, projectName: event.target.value })} /></label><label>Project description<textarea required rows={8} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label>Requested amount and currency<input value={form.requestedAmount} onChange={(event) => setForm({ ...form, requestedAmount: event.target.value })} placeholder="e.g. 5,000 USDC" /></label><label>Milestones and verification plan<textarea rows={5} value={form.milestones} onChange={(event) => setForm({ ...form, milestones: event.target.value })} /></label><label>Team and relevant experience<textarea rows={4} value={form.team} onChange={(event) => setForm({ ...form, team: event.target.value })} /></label><label>Links and repositories<textarea rows={5} value={form.links} onChange={(event) => setForm({ ...form, links: event.target.value })} /></label><button className="primary-button" disabled={busy}>{busy ? "Saving application…" : "Submit application"} <Send size={14} /></button></form>}</div>;
+}

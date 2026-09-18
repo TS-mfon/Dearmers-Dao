@@ -11,6 +11,14 @@ import { reconcileReview } from "./_proposal-jobs.js";
 import { reviewCapabilities, type ReviewJob } from "../shared/proposals.js";
 import { reconcileProposalExecution } from "./_automation.js";
 
+async function startReviewWithin(proposalId: string, timeoutMs = 8_000) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const started = reconcileReview(proposalId, true).then(() => true, () => true);
+  const timed = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
+  try { return await Promise.race([started, timed]); }
+  finally { if (timer) clearTimeout(timer); }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
   res.setHeader("Cache-Control", "no-store");
@@ -81,8 +89,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const saved = await db.collection("proposals").findOneAndUpdate({ daoId, actor: identity!.sub, clientKey }, { $setOnInsert: { daoId, actor: identity!.sub, clientKey, wallet, title, description, amount, amountAtomic: String(amountAtomic), kind, recipient: kind === "spend" ? body.recipient.toLowerCase() : wallet, category: String(body.category || "general").slice(0, 80), evidence, supersedes, missionSnapshot: dao.mission, constitutionSnapshot: dao.constitution, rulesVersion: dao.rulesVersion, status: "awaiting_ai_review", evaluation: null, createdAt: new Date(), updatedAt: new Date() } }, { upsert: true, returnDocument: "after" });
     const id = String(saved!._id);
-    await reconcileReview(id, true);
+    await db.collection("proposalJobs").updateOne({ proposalId: id }, { $setOnInsert: { proposalId: id, daoId, daoAddress: dao.dao, status: "queued", createdAt: new Date() } }, { upsert: true });
+    const reviewStarted = await startReviewWithin(id);
     const job = await db.collection("proposalJobs").findOne({ proposalId: id }, { projection: { lease: 0, leaseUntil: 0 } });
-    return json(res, 201, { proposal: await db.collection("proposals").findOne({ _id: saved!._id }), job, warning: job?.error || undefined });
+    return json(res, 201, { proposal: await db.collection("proposals").findOne({ _id: saved!._id }), job, warning: job?.error || (!reviewStarted ? "Proposal saved. AI review submission is continuing in the background and automation will resume it safely." : undefined) });
   } catch (error) { return errorResponse(res, error); }
 }

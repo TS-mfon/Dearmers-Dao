@@ -3,7 +3,7 @@ import { chains, createAccount, createClient } from "genlayer-js";
 import { method, json, safeError } from "./_http.js";
 import { privateKeyFromEnv } from "./_signers.js";
 
-const allowed = new Set(["register_dao", "update_dao", "set_active", "set_constitution", "evaluate_proposal"]);
+const allowed = new Set(["register_dao", "update_dao", "set_active", "set_constitution", "evaluate_proposal", "evaluate_grant"]);
 
 function getChain() {
   const network = process.env.GENLAYER_NETWORK || "studio-dev";
