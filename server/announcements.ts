@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
 import { escapeHtml, sendEmail } from "./_email.js";
 import { findDaoForIdentity } from "./dao-auth.js";
@@ -26,5 +26,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (followers.length) await db.collection("notifications").insertMany(followers.map((follower) => ({ identity: follower.actor || null, wallet: follower.follower || null, kind: "dao_announcement", daoId, title: item.title, body: item.body, readAt: null, createdAt: new Date() })));
     if (profiles.length) { const emails = profiles.map((profile) => String(profile.email || "")).filter(Boolean); try { const delivery = await sendEmail({ to: emails, subject: `${dao.name}: ${item.title}`, html: `<h1>${escapeHtml(item.title)}</h1><p>${escapeHtml(item.body)}</p>`, eventKey }); await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "sent", providerId: delivery.id, sent: delivery.sent, updatedAt: new Date() } }, { upsert: true }); } catch (error) { await db.collection("emailJobs").updateOne({ eventKey }, { $set: { eventKey, status: "failed", error: safeError(error), updatedAt: new Date() } }, { upsert: true }); } }
     return json(res, 201, { ok: true, announcement: item });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

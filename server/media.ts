@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GridFSBucket, ObjectId } from "mongodb";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { bearerIdentity } from "./_privy.js";
 
 const mimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
@@ -40,5 +40,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const metadata = file.metadata as { contentType?: string } | undefined;
     res.status(200).setHeader("content-type", metadata?.contentType || "application/octet-stream").setHeader("cache-control", "public, max-age=31536000, immutable");
     bucket.openDownloadStream(new ObjectId(id)).pipe(res as never);
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

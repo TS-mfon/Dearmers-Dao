@@ -60,6 +60,8 @@ export async function syncDaoPolicy(daoId: string) {
   const lease = await db.collection("daoIndex").findOneAndUpdate({ daoId, $or: [{ policyLeaseUntil: { $exists: false } }, { policyLeaseUntil: { $lt: new Date() } }] }, { $set: { policyLeaseUntil: new Date(Date.now() + 120_000) } }, { returnDocument: "after" });
   if (!lease) return;
   try {
+    const address = evaluatorAddress();
+    const sameEvaluator = String(dao.policyEvaluatorAddress || "").toLowerCase() === address.toLowerCase();
     let state = await readPolicy(dao.dao as Address);
     if (state.version === "0") {
       const governanceState = await repairLegacyGovernance(dao, dao.dao as Address, BigInt(state.version));
@@ -69,27 +71,27 @@ export async function syncDaoPolicy(daoId: string) {
       }
       state = await readPolicy(dao.dao as Address);
     }
-    let hash = dao.policyTxVersion === state.version ? dao.policyTxHash : undefined;
+    let hash = sameEvaluator && dao.policyTxVersion === state.version ? dao.policyTxHash : undefined;
     const policyText = String(state.constitution.policyText || "");
-    if (dao.rulesVersion === state.version && dao.policySyncStatus === "ready" && dao.constitution === policyText && !dao.pendingMission) return;
+    if (sameEvaluator && dao.rulesVersion === state.version && dao.policySyncStatus === "ready" && dao.constitution === policyText && !dao.pendingMission) return;
     if (!hash) {
-      if (dao.policySyncStatus === "submission_unknown" && dao.policyTxVersion === state.version) throw new HttpError(409, "Policy submission was interrupted. Reconcile the GenLayer transaction before submitting again.");
-      const client = genlayerClient(true); const address = evaluatorAddress();
+      if (sameEvaluator && dao.policySyncStatus === "submission_unknown" && dao.policyTxVersion === state.version) throw new HttpError(409, "Policy submission was interrupted. Reconcile the GenLayer transaction before submitting again.");
+      const client = genlayerClient(true);
       const args = [daoId, state.version, policyText, JSON.stringify({ mission: dao.pendingMission || dao.mission, weeklySpendLimit: String(state.constitution.weeklySpendLimit), allInputsUntrusted: true })];
       const fees = await client.estimateTransactionFeesForWrite({ address, functionName: "set_constitution", args });
-      await db.collection("daoIndex").updateOne({ daoId }, { $set: { policySyncStatus: "submission_unknown", policyTxVersion: state.version } });
+      await db.collection("daoIndex").updateOne({ daoId }, { $set: { policySyncStatus: "submission_unknown", policyTxVersion: state.version, policyEvaluatorAddress: address, policyError: "" }, $unset: { policyTxHash: "" } });
       hash = String(await client.writeContract({ address, functionName: "set_constitution", args, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } }));
-      await db.collection("daoIndex").updateOne({ daoId }, { $set: { policyTxHash: hash, policySyncStatus: "pending", policyTxVersion: state.version, policyError: "" } });
+      await db.collection("daoIndex").updateOne({ daoId }, { $set: { policyTxHash: hash, policySyncStatus: "pending", policyTxVersion: state.version, policyEvaluatorAddress: address, policyError: "" } });
       return;
     }
     const transaction = await genlayerClient().getTransaction({ hash: String(hash) as never });
     const progress = transactionState(transaction as unknown as Record<string, unknown>);
     if (progress.failed) {
-      await db.collection("daoIndex").updateOne({ daoId }, { $set: { policySyncStatus: "failed", policyError: "The policy transaction failed. Retry synchronization." }, $unset: { policyTxHash: "" } });
+      await db.collection("daoIndex").updateOne({ daoId }, { $set: { policySyncStatus: "failed", policyEvaluatorAddress: address, policyError: "The policy transaction failed. Retry synchronization." }, $unset: { policyTxHash: "" } });
       return;
     }
     if (!progress.finalized || !progress.successful) return;
-    await db.collection("daoIndex").updateOne({ daoId }, { $set: { rulesVersion: state.version, constitution: policyText, mission: dao.pendingMission || dao.mission || "", policySyncStatus: "ready", policyError: "", treasuryPolicy: { ...dao.treasuryPolicy, weeklyUsdcLimit: String(Number(state.constitution.weeklySpendLimit) / 1e6), manualFundingThreshold: String(Number(state.threshold) / 1e6) }, updatedAt: new Date() }, $unset: { pendingMission: "", pendingConstitution: "" } });
+    await db.collection("daoIndex").updateOne({ daoId }, { $set: { rulesVersion: state.version, constitution: policyText, mission: dao.pendingMission || dao.mission || "", policySyncStatus: "ready", policyEvaluatorAddress: address, policyError: "", treasuryPolicy: { ...dao.treasuryPolicy, weeklyUsdcLimit: String(Number(state.constitution.weeklySpendLimit) / 1e6), manualFundingThreshold: String(Number(state.threshold) / 1e6) }, updatedAt: new Date() }, $unset: { pendingMission: "", pendingConstitution: "" } });
   } catch (error) {
     await db.collection("daoIndex").updateOne({ daoId }, { $set: { policyError: safeError(error) } });
     throw error;

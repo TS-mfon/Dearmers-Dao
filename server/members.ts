@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { ObjectId } from "mongodb";
@@ -14,11 +14,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const identity = await bearerIdentity(req.headers.authorization);
       const admin = identity ? await findDaoForIdentity(db, daoId, identity) : null;
-      const [members, applications] = await Promise.all([
+      const [members, applications, memberCount] = await Promise.all([
         db.collection("daoMembers").find({ daoId, status: "active" }).sort({ joinedAt: 1 }).limit(500).toArray(),
         admin ? db.collection("membershipApplications").find({ daoId, status: "pending" }).sort({ createdAt: 1 }).limit(500).toArray() : Promise.resolve([]),
+        db.collection("daoMembers").countDocuments({ daoId, status: "active" }),
       ]);
-      return json(res, 200, { members, applications });
+      return json(res, 200, { members, applications, memberCount });
     }
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const dao = await findDaoForIdentity(db, daoId, identity, String(req.body?.wallet || ""));
@@ -34,5 +35,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await db.collection("notifications").insertOne({ identity: application.actor, kind: `membership_${status}`, daoId, title: `Membership ${status}`, body: `Your membership request for ${dao.name} was ${status}.`, readAt: null, createdAt: new Date() });
     await db.collection("auditLogs").insertOne({ scopeId: daoId, type: `membership_${status}`, actor: identity.sub, target: application.actor, createdAt: new Date() });
     return json(res, 200, { ok: true, status });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

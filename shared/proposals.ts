@@ -9,17 +9,19 @@ export const reviewPending = (status: string) => ["awaiting_ai_review", "submitt
 export function reviewCapabilities(status: string, job: ReviewJob | null, authorized: boolean): ReviewCapabilities {
   const pending = authorized && reviewPending(status);
   const uncertain = ["broadcasting", "submission_unknown"].includes(job?.status || "");
+  const syncingPolicy = job?.status === "syncing_policy";
   const noHash = !job?.genlayerTxHash;
   return {
-    canStart: pending && noHash && !uncertain && job?.status !== "submitting",
+    canStart: pending && noHash && !uncertain && !syncingPolicy && job?.status !== "submitting",
     canRetry: pending && Boolean(job?.genlayerTxHash) && ["relay_failed", "failed", "transaction_failed", "evaluation_unavailable"].includes(job?.status || ""),
-    canRefresh: pending && Boolean(job?.genlayerTxHash),
+    canRefresh: pending && (Boolean(job?.genlayerTxHash) || syncingPolicy),
     canRecover: pending && noHash && uncertain,
     canReplace: authorized && ["corrections_required", "rejected_by_genlayer", "escalated"].includes(status),
   };
 }
 
 export function reviewLabel(status: string, job: ReviewJob | null) {
+  if (job?.status === "syncing_policy") return "Synchronizing DAO policy";
   if (!job?.genlayerTxHash && job?.error?.includes("Base constitution")) return "Base governance setup pending";
   if (!job?.genlayerTxHash && job?.error?.includes("GenLayer")) return "GenLayer policy synchronization pending";
   if (!job?.genlayerTxHash && job?.error?.includes("active constitution")) return "Base governance requires DAO setup";
@@ -30,7 +32,7 @@ export function reviewLabel(status: string, job: ReviewJob | null) {
   if (job?.status === "relay_failed" || status === "approved_for_voting") return "Consensus reached · completing voting setup";
   if (job?.genlayerStatus?.includes("APPEAL") || job?.genlayerStatus === "UNDETERMINED") return "Consensus disputed";
   if (job?.genlayerStatus === "ACCEPTED") return "Consensus reached · awaiting finality";
-  if (status === "awaiting_ai_review" || (reviewPending(status) && !job?.genlayerTxHash)) return "Awaiting AI Review";
+  if (reviewPending(status) && !job?.genlayerTxHash) return "Awaiting AI Review";
   if (reviewPending(status)) return "Under AI Review";
   return ({ active_voting: "Finalized · approved for voting", rejected_by_genlayer: "Finalized · rejected", corrections_required: "Finalized · corrections required", escalated: "Finalized · further evidence required" } as Record<string, string>)[status] || "Review finalized";
 }

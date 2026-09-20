@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createPublicClient, http, isAddress, type Address } from "viem";
 import { base, mainnet } from "viem/chains";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 
 const stringAbi = (name: string) => [{ type: "function", name, stateMutability: "view", inputs: [], outputs: [{ type: "string" }] }] as const;
 const decimalsAbi = [{ type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] }] as const;
@@ -59,5 +59,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const asset = { chain: chainName, chainId: config.id, address: normalized, name: name || contractName || "Unknown asset", symbol, standard, decimals, explorerUrl: `${config.explorer}/address/${address}`, source, verified: Boolean(contractName), updatedAt: new Date(), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) };
     await db?.collection("assetMetadata").updateOne({ chain: chainName, address: normalized }, { $set: asset }, { upsert: true });
     return json(res, 200, asset);
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

@@ -14,6 +14,7 @@ import { syncDaoPolicy } from "./_policy.js";
 import { sendEmail } from "./_email.js";
 import { reconcileProposalVotingNotifications } from "./reviews.js";
 import { reconcileGrantApplication } from "./_grant-jobs.js";
+import { evaluatorAddress } from "./_genlayer.js";
 
 const transferAbi = parseAbi(["function transfer(address to, uint256 amount) returns (bool)", "event Transfer(address indexed from, address indexed to, uint256 value)"]);
 type RelayerResult = { requiredPaymentAmount?: string; context?: unknown; taskId?: string; status?: string; error?: string; message?: string; receipt?: { transactionHash?: Hex }; hash?: Hex; txHash?: Hex; targetAddress?: Address; feeCollector?: Address };
@@ -134,13 +135,18 @@ export async function reconcileProposalExecution(proposal: Document) {
 
 export async function reconcileApplication(limit = 25) {
   const db = await database(); const errors: string[] = []; let processed = 0;
+  const currentEvaluator = evaluatorAddress();
   const attempt = async (task: () => Promise<unknown>) => { try { await task(); processed++; } catch (error) { errors.push(safeError(error)); } };
   for (const job of await db.collection("daoCreationJobs").find({ status: { $ne: "ready" } }).limit(limit).toArray()) await attempt(() => reconcileCreation(job.clientKey));
   for (const dao of await db.collection("daoIndex").find({ mode: 1, banned: { $ne: true } }).limit(limit).toArray()) await attempt(async () => {
     await db.collection("grants").updateOne({ grantId: dao.daoId }, { $set: { grantId: dao.daoId, slug: dao.daoId, daoId: dao.daoId, name: dao.name, description: dao.description, mission: dao.mission, requirements: dao.constitution, criteria: dao.constitution, status: dao.active === false ? "closed" : "open", updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
   });
-  for (const dao of await db.collection("daoIndex").find({ policySyncStatus: { $ne: "ready" } }).limit(limit).toArray()) await attempt(() => syncDaoPolicy(dao.daoId));
-  for (const proposal of await db.collection("proposals").find({ status: { $in: ["awaiting_ai_review", "evaluating", "approved_for_voting"] } }).limit(limit).toArray()) await attempt(() => reconcileReview(String(proposal._id)));
+  for (const dao of await db.collection("daoIndex").find({ $or: [{ policySyncStatus: { $ne: "ready" } }, { policyEvaluatorAddress: { $ne: currentEvaluator } }] }).limit(limit).toArray()) await attempt(() => syncDaoPolicy(dao.daoId));
+  for (const proposal of await db.collection("proposals").find({ status: { $in: ["awaiting_ai_review", "evaluating", "approved_for_voting"] } }).limit(limit).toArray()) await attempt(async () => {
+    const job = await db.collection("proposalJobs").findOne({ proposalId: String(proposal._id) });
+    const resume = !job?.genlayerTxHash && !["broadcasting", "submission_unknown"].includes(String(job?.status || ""));
+    await reconcileReview(String(proposal._id), resume);
+  });
   for (const application of await db.collection("grantApplications").find({ status: { $in: ["awaiting_ai_review", "evaluating"] } }).limit(limit).toArray()) await attempt(() => reconcileGrantApplication(String(application._id), true));
   for (const vote of await db.collection("proposalVotes").find({ status: "pending", txHash: { $exists: true } }).limit(limit).toArray()) await attempt(async () => { const receipt = await baseClient().getTransactionReceipt({ hash: vote.txHash as Hex }); await db.collection("proposalVotes").updateOne({ _id: vote._id }, { $set: { status: receipt.status === "success" ? "confirmed" : "failed" } }); });
   for (const email of await db.collection("emailJobs").find({ status: "failed", attempts: { $lt: 4 }, nextAttemptAt: { $lte: new Date() }, recipients: { $type: "array" }, subject: { $type: "string" }, html: { $type: "string" } }).limit(limit).toArray()) await attempt(async () => {

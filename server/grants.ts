@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
 import { reconcileGrantApplication } from "./_grant-jobs.js";
 
@@ -49,5 +49,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const reviewStarted = await startGrantWithin(applicationId);
     const job = await db.collection("grantJobs").findOne({ applicationId }, { projection: { lease: 0, leaseUntil: 0 } });
     return json(res, 201, { ok: true, application: await db.collection("grantApplications").findOne({ _id: saved!._id }), job, warning: job?.error || (!reviewStarted ? "Application saved. GenLayer review will continue through automation." : undefined) });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

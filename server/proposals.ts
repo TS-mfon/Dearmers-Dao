@@ -10,6 +10,7 @@ import { findDaoForIdentity } from "./dao-auth.js";
 import { reconcileReview } from "./_proposal-jobs.js";
 import { reviewCapabilities, type ReviewJob } from "../shared/proposals.js";
 import { reconcileProposalExecution } from "./_automation.js";
+import { syncProposalState } from "./_proposal-state.js";
 
 async function startReviewWithin(proposalId: string, timeoutMs = 8_000) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -30,8 +31,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const identity = req.method === "POST" ? await requirePrivyIdentity(req.headers.authorization) : await bearerIdentity(req.headers.authorization);
     if (proposalId) {
       if (!ObjectId.isValid(proposalId)) throw new HttpError(404, "Proposal not found.");
-      const proposal = await db.collection("proposals").findOne({ _id: new ObjectId(proposalId), ...(daoId ? { daoId } : {}) });
+      let proposal = await db.collection("proposals").findOne({ _id: new ObjectId(proposalId), ...(daoId ? { daoId } : {}) });
       if (!proposal) throw new HttpError(404, "Proposal not found in this DAO.");
+      if (req.method === "GET" && proposal.onchainProposalId !== undefined && proposal.daoAddress && ["active_voting", "passed", "execution_pending"].includes(String(proposal.status))) {
+        try {
+          await syncProposalState(proposal);
+          proposal = await db.collection("proposals").findOne({ _id: proposal._id }) || proposal;
+        } catch (error) { console.error("Proposal state refresh failed:", error); }
+      }
       const daoAdmin = identity ? await findDaoForIdentity(db, proposal.daoId, identity) : null;
       const authorized = Boolean(identity && (identity.sub === proposal.actor || daoAdmin));
       const job = await db.collection("proposalJobs").findOne({ proposalId }, { projection: { lease: 0, leaseUntil: 0 } });

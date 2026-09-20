@@ -47,9 +47,9 @@ export function ProposalDetailRoute({ onNotice }: Props) {
     const proposal = data?.proposal; if (!proposal || !data.canVote) return;
     setBusy(true);
     try {
-      const nonce = BigInt(`0x${crypto.randomUUID().replaceAll("-", "")}`); const deadline = BigInt(Math.floor(Date.now() / 1000) + 900);
-      const signature = await memberWallet.signTypedData({ types: { VoteIntent: [{ name: "daoId", type: "string" }, { name: "proposalId", type: "uint256" }, { name: "support", type: "bool" }, { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" }] }, primaryType: "VoteIntent", domain: { name: "Dearmers DAO", version: "1", chainId: 84532, verifyingContract: proposal.daoAddress as Address }, message: { daoId, proposalId: BigInt(proposal.onchainProposalId!), support, nonce, deadline } });
-      const response = await fetch("/api/votes", { method: "POST", headers: { ...(await headers()), "content-type": "application/json" }, body: JSON.stringify({ proposalId, support, wallet: memberWallet.address, signature, nonce: nonce.toString(), deadline: deadline.toString() }) });
+      const nonce = BigInt(`0x${crypto.randomUUID().replaceAll("-", "")}`).toString(); const deadline = String(Math.floor(Date.now() / 1000) + 900);
+      const signature = await memberWallet.signTypedData({ types: { VoteIntent: [{ name: "daoId", type: "string" }, { name: "proposalId", type: "uint256" }, { name: "support", type: "bool" }, { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" }] }, primaryType: "VoteIntent", domain: { name: "Dearmers DAO", version: "1", chainId: 84532, verifyingContract: proposal.daoAddress as Address }, message: { daoId, proposalId: proposal.onchainProposalId!, support, nonce, deadline } });
+      const response = await fetch("/api/votes", { method: "POST", headers: { ...(await headers()), "content-type": "application/json" }, body: JSON.stringify({ proposalId, support, wallet: memberWallet.address, signature, nonce, deadline }) });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || "Vote failed.");
       onNotice({ tone: "success", text: result.message || "Vote submitted. Waiting for onchain confirmation." }); setVoteVersion((value) => value + 1);
     } catch (reason) { onNotice({ tone: "error", text: reason instanceof Error ? reason.message : "Vote failed." }); }

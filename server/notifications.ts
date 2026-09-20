@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
 import { ObjectId } from "mongodb";
 
@@ -14,5 +14,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (id && ObjectId.isValid(id)) await db.collection("notifications").updateOne({ _id: new ObjectId(id), identity: identity.sub }, { $set: { readAt: new Date() } });
     else await db.collection("notifications").updateMany({ identity: identity.sub, readAt: null }, { $set: { readAt: new Date() } });
     json(res, 200, { ok: true });
-  } catch (error) { json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

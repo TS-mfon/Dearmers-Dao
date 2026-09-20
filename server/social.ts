@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { Address } from "viem";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { bearerIdentity } from "./_privy.js";
 
 function walletOf(value: unknown) { return String(value || "").toLowerCase() as Address; }
@@ -57,5 +57,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const count = await db.collection(collection).countDocuments({ target, targetType });
     if (action === "follow") await db.collection("notifications").updateOne({ identity: target.replace(/^privy:/, ""), kind: "new_follower", actor: privy.sub }, { $setOnInsert: { identity: target.replace(/^privy:/, ""), kind: "new_follower", actor: privy.sub, title: "New follower", body: "Someone followed your profile.", readAt: null, createdAt: new Date(), targetUrl: `/profile/identity/${encodeURIComponent(`privy:${privy.sub}`)}` } }, { upsert: true });
     return json(res, 200, { ok: true, action, count });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

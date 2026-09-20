@@ -5,6 +5,6 @@
   "explorer": "https://explorer-studio-dev.genlayer.com",
   "runner": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng",
   "owner": "0xEd9EDd8586b20524CafA4F568413C504C9B03172",
-  "evaluatorV2": "0xCc2c3C08858d2ee42E4290e068bF28Fb5297311a",
-  "deploymentTransaction": "0xb0c0b747896a147ff8291805b65a432c4236ddb50005a53afe2c150dffcfadf5"
+  "evaluatorV2": "0x53BB5b599A85D41D1200571fDc7a7268D79B98dd",
+  "deploymentTransaction": "0x882b0dcaf62c6ef3d1e00e2322e102dbc94b28457e4031248dfc45017e3706a1"
 }

@@ -1,4 +1,4 @@
-# v0.4.0
+# v0.4.1
 # { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
 
 import json
@@ -211,7 +211,7 @@ Approve only when constitutional compliance and material claims are sufficiently
                 return False
             return abs(self._bounded_int(independent.get("risk", 100), 100) - self._bounded_int(leader_result.get("risk", 100), 100)) <= 15
 
-        result = gl.vm.run_nondet_unsafe(leader, validator)
+        result = gl.vm.run_nondet_default(leader, validator)
         return Evaluation(scope_id, subject_id, subject_type, str(result.get("decision", "reject")), u256(int(result.get("score", 0))), u256(int(result.get("fit_score", 0))), u256(int(result.get("risk", 100))), str(result.get("reasoning", "")), str(result.get("evidence_report", "")), str(result.get("corrections", "")), str(result.get("uncertainty", "")), str(result.get("rules_version", self.rules_versions[scope_id])), str(result.get("outcome", "rejected")), str(result.get("weak_spots", "")), str(result.get("improvements", "")))
 
     def _evaluation_result(self, result: Evaluation) -> dict:

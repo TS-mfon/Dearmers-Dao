@@ -103,6 +103,7 @@ export interface DaoRecord {
   rules?: string;
   constitution?: string;
   tags?: string[];
+  memberCount?: number;
   access?: DaoMetadata["access"];
   treasuryPolicy?: DaoMetadata["treasuryPolicy"];
   active: boolean;
@@ -138,6 +139,7 @@ export function normalizeDaoRecord(source: DaoSource): DaoRecord {
     rules: source.rules || metadata.rules || "",
     constitution: source.constitution || metadata.constitution || "",
     tags: source.tags || metadata.tags || [],
+    memberCount: Number(source.memberCount || 0),
     access: source.access || metadata.access || "public",
     treasuryPolicy: source.treasuryPolicy || metadata.treasuryPolicy,
     gateChain: source.gateChain || metadata.gate?.chain,

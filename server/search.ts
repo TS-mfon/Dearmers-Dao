@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 
 function escapeRegex(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -16,5 +16,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       db.collection("profiles").find({ $or: [{ username: expression }, { displayName: expression }, { github: expression }, { bio: expression }] }).sort({ reputationScore: -1 }).limit(20).project({ _id: 0, email: 0 }).toArray(),
     ]);
     return json(res, 200, { query, daos, profiles });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

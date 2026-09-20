@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { requirePrivyIdentity } from "./_privy.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 
@@ -31,5 +31,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const item = { daoId, actor: identity.sub, wallet: profile?.wallet || identity.wallet || null, text, createdAt: new Date(), author: { username: profile?.username || "", displayName: profile?.displayName || "", avatarUrl: profile?.avatarUrl || "" } };
     await db.collection("chatMessages").insertOne(item);
     return json(res, 201, { message: { ...item, actor: profile?.displayName || profile?.username || profile?.wallet || "DAO member", actorId: identity.sub } });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) { return errorResponse(res, error); }
 }

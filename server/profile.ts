@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, HttpError, method, json, safeError } from "./_http.js";
 import { requirePrivyIdentity, verifiedEmbeddedWallet } from "./_privy.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -24,8 +24,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const response = await fetch(`https://api.github.com/users/${encodeURIComponent(String(github).replace(/^@/, ""))}`, { headers: { accept: "application/vnd.github+json", "user-agent": "Dearmers-Dao" } });
       if (response.ok) { const profile = await response.json() as Record<string, unknown>; update.githubProfile = profile; update.reputationScore = Math.min(100, Number(profile.public_repos || 0) * 3 + Number(profile.followers || 0) + (profile.bio ? 10 : 0) + (profile.blog ? 10 : 0)); }
     }
-    const filter = { identity: profileIdentity };
+    const existingByIdentity = await db.collection("profiles").findOne({ identity: profileIdentity }, { projection: { _id: 1 } });
+    const existingByWallet = await db.collection("profiles").findOne({ wallet: normalizedWallet }, { projection: { _id: 1, identity: 1 } });
+    if (existingByWallet?.identity && String(existingByWallet.identity) !== profileIdentity) throw new HttpError(409, "This wallet is already linked to another profile.");
+    const filter = existingByIdentity ? { _id: existingByIdentity._id } : existingByWallet ? { _id: existingByWallet._id } : { identity: profileIdentity };
     await db.collection("profiles").updateOne(filter, { $set: update }, { upsert: true });
     return json(res, 200, { ok: true, profile: await db.collection("profiles").findOne(filter, { projection: { _id: 0, email: 0 } }) });
-  } catch (error) { return json(res, 500, { error: safeError(error) }); }
+  } catch (error) {
+    if (req.method === "POST" && (!(error instanceof HttpError) || error.status >= 500)) console.error("Profile update failed:", safeError(error));
+    return errorResponse(res, error);
+  }
 }

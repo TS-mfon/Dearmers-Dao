@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { chains, createAccount, createClient } from "genlayer-js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { privateKeyFromEnv } from "./_signers.js";
 
 const allowed = new Set(["register_dao", "update_dao", "set_active", "set_constitution", "evaluate_proposal", "evaluate_grant"]);
@@ -39,6 +39,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const txHash = await genlayer.writeContract({ address, functionName: action, args, value: 0n, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } } as never);
     return json(res, 200, { hash: txHash, status: "SUBMITTED", explorerUrl: `${process.env.GENLAYER_EXPLORER_URL || "https://explorer-studio-dev.genlayer.com"}/tx/${txHash}` });
   } catch (error) {
-    return json(res, 500, { error: safeError(error) });
+    return errorResponse(res, error);
   }
 }

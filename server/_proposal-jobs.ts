@@ -21,7 +21,8 @@ export async function reconcileReview(proposalId: string, start = false, recover
   if (!job) return;
   const update = async (values: Document) => { Object.assign(job, values); await db.collection("proposalJobs").updateOne({ proposalId, lease }, { $set: { ...values, updatedAt: new Date() } }); };
   try {
-    const address = String(job.evaluatorAddress || evaluatorAddress()) as `0x${string}`;
+    const configuredAddress = evaluatorAddress();
+    const address = String(job.genlayerTxHash ? job.evaluatorAddress || configuredAddress : configuredAddress) as `0x${string}`;
     if (recoveryHash) {
       if (job.genlayerTxHash || !["broadcasting", "submission_unknown"].includes(String(job.status))) throw new HttpError(409, "This job does not need a recovered transaction.");
       if (!/^0x[a-fA-F0-9]{64}$/.test(recoveryHash)) throw new HttpError(400, "Enter a valid GenLayer transaction hash.");
@@ -38,11 +39,18 @@ export async function reconcileReview(proposalId: string, start = false, recover
         await update({ status: "submission_unknown", error: "The submission response was interrupted. Recover the finalized transaction hash; do not submit a second review." });
         return;
       }
-      if (!start) return;
-      if (dao.policySyncStatus !== "ready") {
+      const reviewRequested = start || job.status === "syncing_policy";
+      if (!reviewRequested) return;
+      const policyReady = dao.policySyncStatus === "ready" && String(dao.policyEvaluatorAddress || "").toLowerCase() === configuredAddress.toLowerCase();
+      if (!policyReady) {
+        await update({ status: "syncing_policy", evaluatorAddress: configuredAddress, error: "Synchronizing this DAO's constitution with the current GenLayer evaluator." });
         await syncDaoPolicy(proposal.daoId);
         const synchronizedDao = await db.collection("daoIndex").findOne({ daoId: proposal.daoId, banned: { $ne: true } });
-        if (synchronizedDao?.policySyncStatus !== "ready") throw new HttpError(409, String(synchronizedDao?.policyError || "The platform is synchronizing this DAO's constitution with GenLayer. Check status again shortly."));
+        const synchronized = synchronizedDao?.policySyncStatus === "ready" && String(synchronizedDao?.policyEvaluatorAddress || "").toLowerCase() === configuredAddress.toLowerCase();
+        if (!synchronized) {
+          await update({ status: "syncing_policy", error: String(synchronizedDao?.policyError || "The platform is synchronizing this DAO's constitution with GenLayer. Review submission will resume automatically.") });
+          return;
+        }
         Object.assign(dao, synchronizedDao);
       }
       await update({ status: "submitting", evaluatorAddress: address, error: "" });
