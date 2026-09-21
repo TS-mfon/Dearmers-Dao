@@ -6,7 +6,7 @@ import { reconcileGrantApplication } from "./_grant-jobs.js";
 
 async function startGrantWithin(applicationId: string, timeoutMs = 8_000) {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const started = reconcileGrantApplication(applicationId, true).then(() => true, () => true);
+  const started = reconcileGrantApplication(applicationId, true).then(() => true, () => false);
   const timed = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
   try { return await Promise.race([started, timed]); }
   finally { if (timer) clearTimeout(timer); }
@@ -24,10 +24,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (String(req.query.mine || "") === "1") {
         const identity = await bearerIdentity(req.headers.authorization);
         if (!identity) return json(res, 401, { error: "Sign in to view your grant application." });
-        const application = await db.collection("grantApplications").findOne({ grantId: grant.grantId, actor: identity.sub });
+        let application = await db.collection("grantApplications").findOne({ grantId: grant.grantId, actor: identity.sub });
         const applicationId = application ? String(application._id) : "";
-        const job = applicationId ? await db.collection("grantJobs").findOne({ applicationId }, { projection: { lease: 0, leaseUntil: 0 } }) : null;
-        return json(res, 200, { grant, application, job });
+        if (applicationId && ["awaiting_ai_review", "evaluating"].includes(String(application?.status))) {
+          await startGrantWithin(applicationId, 12_000);
+          application = await db.collection("grantApplications").findOne({ _id: application!._id });
+        }
+        const [latestGrant, job] = await Promise.all([
+          db.collection("grants").findOne({ _id: grant._id }, { projection: { policyLease: 0, policyLeaseUntil: 0 } }),
+          applicationId ? db.collection("grantJobs").findOne({ applicationId }, { projection: { lease: 0, leaseUntil: 0 } }) : Promise.resolve(null),
+        ]);
+        return json(res, 200, { grant: latestGrant || grant, application, job });
       }
       return json(res, 200, { grant });
     }

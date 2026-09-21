@@ -73,9 +73,9 @@ export async function reconcileGrantApplication(applicationId: string, start = f
     }
     const state = transactionState(await genlayerClient().getTransaction({ hash: String(job.genlayerTxHash) as never }) as unknown as Record<string, unknown>);
     await update({ genlayerStatus: state.status });
-    if (state.disputed) { await update({ status: "consensus_disputed", error: "GenLayer consensus is undetermined or disputed. No grant recommendation exists yet." }); return; }
-    if (state.executionFailed) { await update({ status: "evaluation_unavailable", error: "GenLayer finalized the transaction without a valid grant evaluation." }); return; }
-    if (state.canceled) { await update({ status: "transaction_failed", error: "The GenLayer grant evaluation was canceled." }); return; }
+    if (state.disputed) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "consensus_disputed", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "consensus_disputed", error: "GenLayer consensus is undetermined or disputed. No grant recommendation exists yet." }); return; }
+    if (state.executionFailed) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "evaluation_unavailable", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "evaluation_unavailable", error: "GenLayer finalized the transaction without a valid grant evaluation." }); return; }
+    if (state.canceled) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "transaction_failed", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "transaction_failed", error: "The GenLayer grant evaluation was canceled." }); return; }
     if (!state.finalized) { await update({ status: "evaluating", error: "" }); return; }
     const evaluation = await finalizedGrantEvaluation(String(application.grantId), applicationId, address);
     if (String(evaluation.rules_version) !== grantRulesVersion(grant)) throw new HttpError(409, "The grant review used a different requirements version.");
