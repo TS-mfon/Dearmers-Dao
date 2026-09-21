@@ -36,7 +36,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ]);
         return json(res, 200, { grant: latestGrant || grant, application, job });
       }
-      return json(res, 200, { grant });
+      const applications = await db.collection("grantApplications").find({ grantId: grant.grantId }).sort({ updatedAt: -1 }).limit(100).project({ _id: 1, grantId: 1, projectName: 1, description: 1, requestedAmount: 1, milestones: 1, team: 1, links: 1, status: 1, evaluation: 1, genlayerTxHash: 1, createdAt: 1, updatedAt: 1 }).toArray();
+      return json(res, 200, { grant, applications: applications.map(({ _id, ...application }) => ({ applicationId: String(_id), ...application })) });
     }
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const body = req.body || {};
