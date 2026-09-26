@@ -1,7 +1,7 @@
 import { isAddress, parseUnits, type Address } from "viem";
 import { baseClient, baseSigner, confirmed, daoAbi } from "./_chain.js";
 import { database } from "./_db.js";
-import { evaluatorAddress, genlayerClient, transactionState } from "./_genlayer.js";
+import { evaluatorAddress, genlayerClient, isRejectedBeforeBroadcast, transactionState, withGenlayerRetry } from "./_genlayer.js";
 import { HttpError, safeError } from "./_http.js";
 
 export async function readPolicy(address: Address) {
@@ -78,13 +78,13 @@ export async function syncDaoPolicy(daoId: string) {
       if (sameEvaluator && dao.policySyncStatus === "submission_unknown" && dao.policyTxVersion === state.version) throw new HttpError(409, "Policy submission was interrupted. Reconcile the GenLayer transaction before submitting again.");
       const client = genlayerClient(true);
       const args = [daoId, state.version, policyText, JSON.stringify({ mission: dao.pendingMission || dao.mission, weeklySpendLimit: String(state.constitution.weeklySpendLimit), allInputsUntrusted: true })];
-      const fees = await client.estimateTransactionFeesForWrite({ address, functionName: "set_constitution", args });
+      const fees = await withGenlayerRetry(() => client.estimateTransactionFeesForWrite({ address, functionName: "set_constitution", args }));
       await db.collection("daoIndex").updateOne({ daoId }, { $set: { policySyncStatus: "submission_unknown", policyTxVersion: state.version, policyEvaluatorAddress: address, policyError: "" }, $unset: { policyTxHash: "" } });
       hash = String(await client.writeContract({ address, functionName: "set_constitution", args, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } }));
       await db.collection("daoIndex").updateOne({ daoId }, { $set: { policyTxHash: hash, policySyncStatus: "pending", policyTxVersion: state.version, policyEvaluatorAddress: address, policyError: "" } });
       return;
     }
-    const transaction = await genlayerClient().getTransaction({ hash: String(hash) as never });
+    const transaction = await withGenlayerRetry(() => genlayerClient().getTransaction({ hash: String(hash) as never }));
     const progress = transactionState(transaction as unknown as Record<string, unknown>);
     if (progress.failed) {
       await db.collection("daoIndex").updateOne({ daoId }, { $set: { policySyncStatus: "failed", policyEvaluatorAddress: address, policyError: "The policy transaction failed. Retry synchronization." }, $unset: { policyTxHash: "" } });
@@ -93,7 +93,10 @@ export async function syncDaoPolicy(daoId: string) {
     if (!progress.finalized || !progress.successful) return;
     await db.collection("daoIndex").updateOne({ daoId }, { $set: { rulesVersion: state.version, constitution: policyText, mission: dao.pendingMission || dao.mission || "", policySyncStatus: "ready", policyEvaluatorAddress: address, policyError: "", treasuryPolicy: { ...dao.treasuryPolicy, weeklyUsdcLimit: String(Number(state.constitution.weeklySpendLimit) / 1e6), manualFundingThreshold: String(Number(state.threshold) / 1e6) }, updatedAt: new Date() }, $unset: { pendingMission: "", pendingConstitution: "" } });
   } catch (error) {
-    await db.collection("daoIndex").updateOne({ daoId }, { $set: { policyError: safeError(error) } });
+    // A capacity rejection proves the set_constitution call never reached a validator, so clearing the
+    // interrupted marker is safe and lets the automation loop retry instead of blocking every review.
+    const unwedge = isRejectedBeforeBroadcast(error) ? { $set: { policySyncStatus: "failed", policyError: safeError(error) }, $unset: { policyTxVersion: "" } } : { $set: { policyError: safeError(error) } };
+    await db.collection("daoIndex").updateOne({ daoId }, unwedge);
     throw error;
   } finally { await db.collection("daoIndex").updateOne({ daoId }, { $unset: { policyLeaseUntil: "" } }); }
 }

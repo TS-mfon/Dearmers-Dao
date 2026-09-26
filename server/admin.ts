@@ -3,6 +3,7 @@ import { database } from "./_db.js";
 import { HttpError, errorResponse, method, json, safeError } from "./_http.js";
 import { requireAdminSession, digest } from "./_admin-session.js";
 import { escapeHtml, sendEmail } from "./_email.js";
+import { actorLabel, displayNames, isIdentity } from "./_profiles.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
@@ -13,7 +14,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = req.body || {};
     const action = String(req.query.action || body.action || "overview");
     if (req.method === "GET") {
-      if (action === "audit") return json(res, 200, { events: await db.collection("auditLogs").find({ scopeId: "protocol" }).sort({ createdAt: -1 }).limit(200).toArray() });
+      if (action === "audit") {
+        const events = await db.collection("auditLogs").find({ scopeId: "protocol" }).sort({ createdAt: -1 }).limit(200).toArray();
+        // Audit rows store raw Privy DIDs. Resolve those to names; other actors (admin wallets, event keys) pass through.
+        const profiles = await displayNames(db, events.flatMap((event) => [event.actor, event.target]));
+        const label = (value: unknown) => isIdentity(value) ? actorLabel(profiles.get(String(value))) : String(value || "");
+        return json(res, 200, { events: events.map(({ actor, target, ...event }) => ({ ...event, actorLabel: label(actor), targetLabel: label(target) })) });
+      }
       if (action === "monitor" || action === "settings") {
         const configured = (name: string, values: unknown[], detail: string) => ({ name, ok: values.every(Boolean), state: values.every(Boolean) ? "configured" : "missing_configuration", detail });
         const checks = [
@@ -27,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const [users, daos, proposals, memberships, failures] = await Promise.all([
           db.collection("profiles").countDocuments({}), db.collection("daoIndex").countDocuments({}),
           db.collection("proposals").countDocuments({}), db.collection("daoMembers").countDocuments({ status: "active" }),
-          Promise.all(["emailJobs", "proposalJobs", "daoCreationJobs", "executionJobs"].map(async (name) => (await db.collection(name).find({ error: { $exists: true, $ne: "" } }).sort({ updatedAt: -1 }).limit(25).toArray()).map((item) => ({ kind: name, id: String(item._id), daoId: item.daoId, proposalId: item.proposalId, error: item.error, status: item.status, updatedAt: item.updatedAt })))),
+          Promise.all(["emailJobs", "proposalJobs", "grantJobs", "daoCreationJobs", "executionJobs"].map(async (name) => (await db.collection(name).find({ error: { $exists: true, $ne: "" } }).sort({ updatedAt: -1 }).limit(25).toArray()).map((item) => ({ kind: name, id: String(item._id), daoId: item.daoId, proposalId: item.proposalId, grantId: item.grantId, error: item.error, message: item.message || "", status: item.status, updatedAt: item.updatedAt })))),
         ]);
         return json(res, 200, { checks, analytics: { users, daos, proposals, memberships }, failedJobs: failures.flat(), daos: action === "settings" ? await db.collection("daoIndex").find({}).project({ daoId: 1, name: 1 }).limit(200).toArray() : undefined });
       }

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { randomUUID } from "node:crypto";
-import { ObjectId } from "mongodb";
+import { ObjectId, type Db, type Document } from "mongodb";
 import { isAddress, parseUnits, type Address, type Hex } from "viem";
 import { database } from "./_db.js";
 import { HttpError, errorResponse, json, method } from "./_http.js";
@@ -11,6 +11,17 @@ import { reconcileReview } from "./_proposal-jobs.js";
 import { reviewCapabilities, type ReviewJob } from "../shared/proposals.js";
 import { reconcileProposalExecution } from "./_automation.js";
 import { syncProposalState } from "./_proposal-state.js";
+import { actorLabel, displayNames } from "./_profiles.js";
+
+/** Proposal documents key the author by Privy DID; responses carry a display label instead. */
+async function publicProposals(db: Db, docs: Document[]) {
+  const profiles = await displayNames(db, docs.map((doc) => doc.actor));
+  return docs.map((doc) => {
+    const { actor, ...proposal } = doc;
+    delete proposal.clientKey;
+    return { ...proposal, authorLabel: actorLabel(profiles.get(String(actor || "")), proposal.wallet) };
+  });
+}
 
 async function startReviewWithin(proposalId: string, timeoutMs = 8_000) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -64,10 +75,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const membership = identity ? await db.collection("daoMembers").findOne({ daoId: proposal.daoId, actor: identity.sub, status: "active" }) : null;
       const vote = identity ? await db.collection("proposalVotes").findOne({ proposalId, actor: identity.sub }, { projection: { status: 1, txHash: 1, support: 1 } }) : null;
-      return json(res, 200, { proposal, job, executionJob, capabilities, canVote: Boolean(identity && (membership || daoAdmin) && proposal.status === "active_voting" && new Date(proposal.votingEndsAt).getTime() > Date.now() && !vote), vote });
+      const [publicProposal] = await publicProposals(db, [proposal]);
+      return json(res, 200, { proposal: publicProposal, job, executionJob, capabilities, canVote: Boolean(identity && (membership || daoAdmin) && proposal.status === "active_voting" && new Date(proposal.votingEndsAt).getTime() > Date.now() && !vote), vote });
     }
     if (!daoId) throw new HttpError(400, "DAO id is required.");
-    if (req.method === "GET") return json(res, 200, { proposals: await db.collection("proposals").find({ daoId }).sort({ createdAt: -1 }).limit(100).toArray() });
+    if (req.method === "GET") return json(res, 200, { proposals: await publicProposals(db, await db.collection("proposals").find({ daoId }).sort({ createdAt: -1 }).limit(100).toArray()) });
     const dao = await db.collection("daoIndex").findOne({ daoId, banned: { $ne: true } });
     if (!dao) throw new HttpError(404, "DAO not found.");
     const member = await db.collection("daoMembers").findOne({ daoId, actor: identity!.sub, status: "active" });
@@ -99,6 +111,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await db.collection("proposalJobs").updateOne({ proposalId: id }, { $setOnInsert: { proposalId: id, daoId, daoAddress: dao.dao, status: "queued", createdAt: new Date() } }, { upsert: true });
     const reviewStarted = await startReviewWithin(id);
     const job = await db.collection("proposalJobs").findOne({ proposalId: id }, { projection: { lease: 0, leaseUntil: 0 } });
-    return json(res, 201, { proposal: await db.collection("proposals").findOne({ _id: saved!._id }), job, warning: job?.error || (!reviewStarted ? "Proposal saved. AI review submission is continuing in the background and automation will resume it safely." : undefined) });
+    const [created] = await publicProposals(db, [await db.collection("proposals").findOne({ _id: saved!._id }) as Document]);
+    return json(res, 201, { proposal: created, job, warning: job?.message || job?.error || (!reviewStarted ? "Proposal saved. AI review submission is continuing in the background and automation will resume it safely." : undefined) });
   } catch (error) { return errorResponse(res, error); }
 }

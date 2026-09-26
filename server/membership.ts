@@ -29,8 +29,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const daoId = String(req.query.daoId || "");
       if (!daoId) return json(res, 400, { error: "DAO id is required." });
-      const member = await db.collection("daoMembers").findOne({ daoId, actor }, { projection: { _id: 0 } });
-      const application = await db.collection("membershipApplications").findOne({ daoId, actor }, { projection: { _id: 0 } });
+      const member = await db.collection("daoMembers").findOne({ daoId, actor }, { projection: { _id: 0, actor: 0 } });
+      const application = await db.collection("membershipApplications").findOne({ daoId, actor }, { projection: { _id: 0, actor: 0 } });
       return json(res, 200, { member, application });
     }
     const body = req.body || {};

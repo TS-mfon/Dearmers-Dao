@@ -32,3 +32,22 @@ export function safeError(error: unknown) {
   const message = stderr && !baseMessage.includes(stderr) ? `${baseMessage} Details: ${stderr}` : baseMessage;
   return message.replace(/0x[a-fA-F0-9]{64}/g, "[redacted]").slice(0, 300);
 }
+
+/**
+ * Plain-language counterpart to safeError, for anything a member can see.
+ * safeError keeps the raw diagnostic for the admin panel; this never leaks
+ * viem wrappers, GenVM stderr, or Python exception names into the product UI.
+ */
+export function userMessage(error: unknown) {
+  if (error instanceof HttpError) return error.message;
+  const raw = safeError(error).toLowerCase();
+  if (["server busy", "execution slots", "retry later", "rate limit", "too many requests", "429"].some((signal) => raw.includes(signal)))
+    return "GenLayer validators are at capacity right now. This review will retry automatically.";
+  if (["timeout", "timed out", "etimedout", "econnreset", "socket hang up", "fetch failed", "502", "503", "504"].some((signal) => raw.includes(signal)))
+    return "GenLayer was temporarily unreachable. This review will retry automatically.";
+  if (raw.includes("keyerror") || raw.includes("execution failed"))
+    return "GenLayer finalized this review but its stored verdict could not be read. Retry the review to run a fresh evaluation.";
+  if (raw.includes("not configured") || raw.includes("domain is not verified"))
+    return "A platform service is not fully configured yet. The team has been notified.";
+  return "This review could not be completed. Retry, or contact the DAO stewards if it keeps failing.";
+}

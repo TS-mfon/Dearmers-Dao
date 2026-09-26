@@ -3,7 +3,8 @@ import { database } from "./_db.js";
 import { errorResponse, method, json } from "./_http.js";
 import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
 import { findDaoForIdentity } from "./dao-auth.js";
-import { ObjectId } from "mongodb";
+import { actorLabel, displayNames } from "./_profiles.js";
+import { ObjectId, type Document } from "mongodb";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
@@ -14,11 +15,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const identity = await bearerIdentity(req.headers.authorization);
       const admin = identity ? await findDaoForIdentity(db, daoId, identity) : null;
-      const [members, applications, memberCount] = await Promise.all([
+      const [memberDocs, applicationDocs, memberCount] = await Promise.all([
         db.collection("daoMembers").find({ daoId, status: "active" }).sort({ joinedAt: 1 }).limit(500).toArray(),
         admin ? db.collection("membershipApplications").find({ daoId, status: "pending" }).sort({ createdAt: 1 }).limit(500).toArray() : Promise.resolve([]),
         db.collection("daoMembers").countDocuments({ daoId, status: "active" }),
       ]);
+      // Privy DIDs must never leave the API. Responses carry display fields and an opaque id only.
+      const profiles = await displayNames(db, [...memberDocs, ...applicationDocs].map((doc) => doc.actor));
+      const publicActor = (doc: Document) => {
+        const profile = profiles.get(String(doc.actor || ""));
+        return { displayName: actorLabel(profile, doc.wallet), username: profile?.username || "", avatarUrl: profile?.avatarUrl || "" };
+      };
+      const members = memberDocs.map((member) => ({ memberId: String(member._id), role: String(member.role || "member"), status: String(member.status || "active"), joinedAt: member.joinedAt, wallet: member.wallet || null, ...publicActor(member) }));
+      const applications = applicationDocs.map((application) => ({ _id: String(application._id), status: String(application.status || "pending"), reason: application.reason || "", createdAt: application.createdAt, ...publicActor(application) }));
       return json(res, 200, { members, applications, memberCount });
     }
     const identity = await requirePrivyIdentity(req.headers.authorization);

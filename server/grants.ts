@@ -24,11 +24,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (String(req.query.mine || "") === "1") {
         const identity = await bearerIdentity(req.headers.authorization);
         if (!identity) return json(res, 401, { error: "Sign in to view your grant application." });
-        let application = await db.collection("grantApplications").findOne({ grantId: grant.grantId, actor: identity.sub });
+        let application = await db.collection("grantApplications").findOne({ grantId: grant.grantId, actor: identity.sub }, { projection: { actor: 0 } });
         const applicationId = application ? String(application._id) : "";
         if (applicationId && ["awaiting_ai_review", "evaluating"].includes(String(application?.status))) {
           await startGrantWithin(applicationId, 12_000);
-          application = await db.collection("grantApplications").findOne({ _id: application!._id });
+          application = await db.collection("grantApplications").findOne({ _id: application!._id }, { projection: { actor: 0 } });
         }
         const [latestGrant, job] = await Promise.all([
           db.collection("grants").findOne({ _id: grant._id }, { projection: { policyLease: 0, policyLeaseUntil: 0 } }),
@@ -36,8 +36,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ]);
         return json(res, 200, { grant: latestGrant || grant, application, job });
       }
-      const applications = await db.collection("grantApplications").find({ grantId: grant.grantId }).sort({ updatedAt: -1 }).limit(100).project({ _id: 1, grantId: 1, projectName: 1, description: 1, requestedAmount: 1, milestones: 1, team: 1, links: 1, status: 1, evaluation: 1, genlayerTxHash: 1, createdAt: 1, updatedAt: 1 }).toArray();
-      return json(res, 200, { grant, applications: applications.map(({ _id, ...application }) => ({ applicationId: String(_id), ...application })) });
+      const [applications, proposals] = await Promise.all([
+        db.collection("grantApplications").find({ grantId: grant.grantId }).sort({ updatedAt: -1 }).limit(100).project({ _id: 1, grantId: 1, projectName: 1, description: 1, requestedAmount: 1, milestones: 1, team: 1, links: 1, status: 1, evaluation: 1, consensusReached: 1, genlayerTxHash: 1, createdAt: 1, updatedAt: 1 }).toArray(),
+        // A grant DAO also carries ordinary proposals, which live in `proposals` and were invisible here.
+        grant.daoId ? db.collection("proposals").find({ daoId: String(grant.daoId) }).sort({ createdAt: -1 }).limit(50).project({ title: 1, description: 1, status: 1, amount: 1, kind: 1, category: 1, consensusReached: 1, createdAt: 1 }).toArray() : Promise.resolve([]),
+      ]);
+      return json(res, 200, { grant, applications: applications.map(({ _id, ...application }) => ({ applicationId: String(_id), ...application })), proposals: proposals.map(({ _id, ...proposal }) => ({ ...proposal, _id: String(_id) })) });
     }
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const body = req.body || {};
@@ -56,6 +60,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await db.collection("grantJobs").updateOne({ applicationId }, { $setOnInsert: { applicationId, grantId: String(grant.grantId), status: "queued", createdAt: new Date() } }, { upsert: true });
     const reviewStarted = await startGrantWithin(applicationId);
     const job = await db.collection("grantJobs").findOne({ applicationId }, { projection: { lease: 0, leaseUntil: 0 } });
-    return json(res, 201, { ok: true, application: await db.collection("grantApplications").findOne({ _id: saved!._id }), job, warning: job?.error || (!reviewStarted ? "Application saved. GenLayer review will continue through automation." : undefined) });
+    return json(res, 201, { ok: true, application: await db.collection("grantApplications").findOne({ _id: saved!._id }, { projection: { actor: 0 } }), job, warning: job?.message || job?.error || (!reviewStarted ? "Application saved. GenLayer review will continue through automation." : undefined) });
   } catch (error) { return errorResponse(res, error); }
 }

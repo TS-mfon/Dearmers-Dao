@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const result: Record<string, unknown> = { dao };
       if (view === "proposals") result.proposals = await db.collection("proposals").find({ daoId }).sort({ updatedAt: -1 }).limit(100).toArray();
       if (view === "members") {
-        result.members = await db.collection("daoMembers").aggregate([{ $match: { daoId } }, { $lookup: { from: "profiles", let: { actor: "$actor" }, pipeline: [{ $match: { $expr: { $eq: ["$identity", { $concat: ["privy:", "$$actor"] }] } } }, { $project: { displayName: 1, username: 1 } }], as: "profile" } }, { $limit: 200 }]).toArray();
+        result.members = await db.collection("daoMembers").aggregate([{ $match: { daoId } }, { $lookup: { from: "profiles", let: { actor: "$actor" }, pipeline: [{ $match: { $expr: { $eq: ["$identity", { $concat: ["privy:", "$$actor"] }] } } }, { $project: { displayName: 1, username: 1 } }], as: "profile" } }, { $project: { actor: 0 } }, { $limit: 200 }]).toArray();
         result.applications = await db.collection("membershipApplications").find({ daoId, status: "pending" }).limit(200).toArray();
       }
       if (view === "settings") { result.policy = await readPolicy(dao.dao as Address); result.delegation = await db.collection("delegations").findOne({ daoId }, { projection: { status: 1, token: 1, executor: 1, expiry: 1 } }); }

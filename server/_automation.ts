@@ -11,7 +11,7 @@ import { reconcileReview } from "./_proposal-jobs.js";
 import { syncProposalState } from "./_proposal-state.js";
 import { reconcileCreation } from "./_dao-creation.js";
 import { syncDaoPolicy } from "./_policy.js";
-import { sendEmail } from "./_email.js";
+import { sendEmail, senderDomainError } from "./_email.js";
 import { reconcileProposalVotingNotifications } from "./reviews.js";
 import { reconcileGrantApplication } from "./_grant-jobs.js";
 import { evaluatorAddress } from "./_genlayer.js";
@@ -155,7 +155,9 @@ export async function reconcileApplication(limit = 25) {
       await db.collection("emailJobs").updateOne({ _id: email._id }, { $set: { status: "sent", providerId: delivery.id, sent: delivery.sent, updatedAt: new Date() }, $unset: { error: "", nextAttemptAt: "" } });
     } catch (error) {
       const attempts = Number(email.attempts || 0) + 1;
-      await db.collection("emailJobs").updateOne({ _id: email._id }, { $set: { attempts, error: safeError(error), nextAttemptAt: new Date(Date.now() + Math.min(60, 5 * 2 ** attempts) * 60_000), updatedAt: new Date() } });
+      // A sender-configuration error can never succeed on retry, so park the job instead of looping on it.
+      const blocked = Boolean(senderDomainError()) || /domain is not verified|is not configured/i.test(safeError(error));
+      await db.collection("emailJobs").updateOne({ _id: email._id }, { $set: { status: blocked ? "blocked" : "failed", attempts: blocked ? 4 : attempts, error: safeError(error), nextAttemptAt: new Date(Date.now() + Math.min(60, 5 * 2 ** attempts) * 60_000), updatedAt: new Date() } });
     }
   });
   const wallet = process.env.BASE_AUTOMATION_PRIVATE_KEY ? baseSigner("BASE_AUTOMATION_PRIVATE_KEY") : null;

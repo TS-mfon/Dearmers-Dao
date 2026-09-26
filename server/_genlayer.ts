@@ -18,6 +18,67 @@ export function evaluatorAddress() {
   return address as `0x${string}`;
 }
 
+function errorText(error: unknown) {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current && typeof current === "object" && depth < 6; depth++) {
+    const source = current as Record<string, unknown>;
+    for (const key of ["message", "shortMessage", "details", "reason", "code"]) if (source[key] !== undefined) parts.push(String(source[key]));
+    current = source.cause;
+  }
+  if (!parts.length && error !== undefined) parts.push(String(error));
+  return parts.join(" | ").toLowerCase();
+}
+
+const transientSignals = ["server busy", "execution slots", "retry later", "rate limit", "too many requests", "429", "502", "503", "504", "timeout", "timed out", "etimedout", "econnreset", "econnrefused", "socket hang up", "fetch failed", "version of json-rpc protocol is not supported"];
+
+export function isTransientRpcError(error: unknown) {
+  const text = errorText(error);
+  return transientSignals.some((signal) => text.includes(signal));
+}
+
+/** Errors that prove the node never queued the transaction, so no submission exists to recover. */
+const rejectedSignals = ["server busy", "execution slots", "retry later", "rate limit", "too many requests", "429", "503"];
+
+export function isRejectedBeforeBroadcast(error: unknown) {
+  const text = errorText(error);
+  if (/0x[a-f0-9]{64}/.test(text)) return false;
+  return rejectedSignals.some((signal) => text.includes(signal));
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Retries idempotent GenLayer reads through transient RPC pressure. Never wrap writeContract with this. */
+export async function withGenlayerRetry<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await operation(); }
+    catch (error) {
+      if (attempt >= attempts || !isTransientRpcError(error)) throw error;
+      await wait(attempt * 500 + Math.floor(Math.random() * 250));
+    }
+  }
+}
+
+/**
+ * Recovers the leader validator's returned evaluation from a decoded studio transaction.
+ * `evaluate_proposal` and `evaluate_grant` both return the evaluation dict, and studio chains
+ * decode `leader_receipt[i].result` into `{ raw, status, payload }` — so the verdict is already
+ * in the receipt and needs no contract read.
+ */
+export function receiptEvaluation(transaction: Record<string, unknown>): unknown {
+  const consensus = transaction.consensus_data && typeof transaction.consensus_data === "object" ? transaction.consensus_data as Record<string, unknown> : {};
+  const receipts = Array.isArray(consensus.leader_receipt) ? consensus.leader_receipt : [];
+  for (const receipt of receipts) {
+    if (!receipt || typeof receipt !== "object") continue;
+    const result = (receipt as Record<string, unknown>).result;
+    if (!result || typeof result !== "object") continue;
+    const decoded = result as Record<string, unknown>;
+    if (String(decoded.status) !== "return" || decoded.payload === undefined || decoded.payload === null) continue;
+    return decoded.payload;
+  }
+  return null;
+}
+
 export function transactionState(transaction: Record<string, unknown>) {
   const status = String(transaction.statusName || transaction.status || "PENDING").replaceAll("_", "").toUpperCase();
   const execution = String(transaction.txExecutionResultName ?? transaction.txExecutionResult ?? transaction.execution_result ?? "").toUpperCase();
@@ -38,7 +99,7 @@ export function normalizeEvaluation(raw: unknown, daoId: string, proposalId: str
 }
 
 export async function finalizedEvaluation(daoId: string, proposalId: string, address: `0x${string}`) {
-  const raw = await genlayerClient().readContract({ address, functionName: "get_evaluation", args: [daoId, proposalId], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
+  const raw = await withGenlayerRetry(() => genlayerClient().readContract({ address, functionName: "get_evaluation", args: [daoId, proposalId], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL }));
   return normalizeEvaluation(raw, daoId, proposalId);
 }
 
@@ -51,6 +112,13 @@ export function normalizeGrantEvaluation(raw: unknown, grantId: string, applicat
 }
 
 export async function finalizedGrantEvaluation(grantId: string, applicationId: string, address: `0x${string}`) {
-  const raw = await genlayerClient().readContract({ address, functionName: "get_grant_evaluation", args: [grantId, applicationId], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL });
+  const raw = await withGenlayerRetry(() => genlayerClient().readContract({ address, functionName: "get_grant_evaluation", args: [grantId, applicationId], jsonSafeReturn: true, transactionHashVariant: TransactionHashVariant.LATEST_FINAL }));
   return normalizeGrantEvaluation(raw, grantId, applicationId);
+}
+
+/** Parses an evaluation without throwing: advisory verdicts and receipt payloads must degrade to null, not error. */
+export function tryNormalizeEvaluation(raw: unknown, scopeId: string, subjectId: string, kind: "proposal" | "grant"): Evaluation | null {
+  if (raw === null || raw === undefined) return null;
+  try { return kind === "proposal" ? normalizeEvaluation(raw, scopeId, subjectId) : normalizeGrantEvaluation(raw, scopeId, subjectId); }
+  catch { return null; }
 }
