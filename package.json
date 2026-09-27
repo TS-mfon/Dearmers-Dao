@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "node --import tsx --test \"test/*.test.ts\"",
+    "test:contracts": "forge test",
     "preview": "vite preview",
     "automation:reconcile": "tsx scripts/reconcile.ts",
     "deploy:genlayer-v2": "tsx scripts/deploy-genlayer-v2.ts",
