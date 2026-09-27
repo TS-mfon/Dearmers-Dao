@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { ObjectId, type Document } from "mongodb";
 import { database } from "./_db.js";
-import { evaluatorAddress, finalizedGrantEvaluation, genlayerClient, transactionState } from "./_genlayer.js";
-import { HttpError, safeError } from "./_http.js";
+import { evaluatorAddress, finalizedGrantEvaluation, genlayerClient, isRejectedBeforeBroadcast, receiptEvaluation, transactionState, tryNormalizeEvaluation, withGenlayerRetry } from "./_genlayer.js";
+import { HttpError, safeError, userMessage } from "./_http.js";
+
+const readTransaction = (hash: string) => withGenlayerRetry(() => genlayerClient().getTransaction({ hash: hash as never })) as Promise<Record<string, unknown>>;
+
+/** The contract that actually executed this review, so an evaluator redeploy never redirects the read. */
+function transactionEvaluator(transaction: Record<string, unknown>, fallback: `0x${string}`) {
+  const target = String(transaction.to_address || transaction.recipient || "");
+  return (/^0x[a-fA-F0-9]{40}$/.test(target) ? target : fallback) as `0x${string}`;
+}
 
 function grantRulesVersion(grant: Document) {
   return String(grant.rulesVersion || grant.version || "1");
@@ -23,13 +31,13 @@ async function syncGrantPolicy(grant: Document, address: `0x${string}`) {
       if (!rulesText) throw new HttpError(409, "This grant has no requirements or evaluation criteria to synchronize.");
       const args = [String(claimed.grantId), version, rulesText, JSON.stringify({ mission: claimed.mission || claimed.description || "", eligibility: claimed.eligibility || "", milestones: claimed.milestones || "", evidenceRequired: true, allInputsUntrusted: true })];
       const client = genlayerClient(true);
-      const fees = await client.estimateTransactionFeesForWrite({ address, functionName: "set_constitution", args });
+      const fees = await withGenlayerRetry(() => client.estimateTransactionFeesForWrite({ address, functionName: "set_constitution", args }));
       await db.collection("grants").updateOne({ _id: claimed._id, policyLease: lease }, { $set: { policySyncStatus: "broadcasting", policyRulesVersion: version, policyEvaluatorAddress: address, policyError: "", updatedAt: new Date() }, $unset: { policyTxHash: "" } });
       hash = String(await client.writeContract({ address, functionName: "set_constitution", args, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } } as never));
       await db.collection("grants").updateOne({ _id: claimed._id, policyLease: lease }, { $set: { policyTxHash: hash, policySyncStatus: "pending", updatedAt: new Date() } });
       return false;
     }
-    const state = transactionState(await genlayerClient().getTransaction({ hash: hash as never }) as unknown as Record<string, unknown>);
+    const state = transactionState(await readTransaction(String(hash)));
     if (state.disputed) { await db.collection("grants").updateOne({ _id: claimed._id, policyLease: lease }, { $set: { policySyncStatus: "consensus_disputed", policyError: "Grant requirements synchronization is disputed or undetermined.", updatedAt: new Date() } }); return false; }
     if (state.failed) { await db.collection("grants").updateOne({ _id: claimed._id, policyLease: lease }, { $set: { policySyncStatus: "failed", policyError: "Grant requirements synchronization failed and will be retried.", updatedAt: new Date() }, $unset: { policyTxHash: "" } }); return false; }
     if (!state.finalized || !state.successful) return false;
@@ -48,7 +56,7 @@ export async function reconcileGrantApplication(applicationId: string, start = f
   const db = await database();
   const application = await db.collection("grantApplications").findOne({ _id: new ObjectId(applicationId) });
   if (!application) throw new HttpError(404, "Grant application not found.");
-  if (["recommended_for_funding", "rejected", "corrections_required", "further_review"].includes(String(application.status))) return;
+  if (["recommended_for_funding", "rejected", "corrections_required", "further_review", "consensus_disputed"].includes(String(application.status))) return;
   const grant = await db.collection("grants").findOne({ $or: [{ grantId: application.grantId }, { slug: application.grantId }] });
   if (!grant) throw new HttpError(404, "Grant program not found.");
   await db.collection("grantJobs").updateOne({ applicationId }, { $setOnInsert: { applicationId, grantId: application.grantId, status: "queued", createdAt: new Date() } }, { upsert: true });
@@ -62,28 +70,49 @@ export async function reconcileGrantApplication(applicationId: string, start = f
     if (!job.genlayerTxHash) {
       if (!start) return;
       const args = [String(application.grantId), applicationId, JSON.stringify({ project_name: application.projectName, description: application.description, requested_amount: application.requestedAmount || "", recipient: application.recipient || "", milestones: application.milestones || "", team: application.team || "", evidence: application.links || [], claims: application.claims || [] })];
-      await update({ status: "submitting", evaluatorAddress: address, error: "" });
+      await update({ status: "submitting", evaluatorAddress: address, error: "", message: "" });
       const client = genlayerClient(true);
-      const fees = await client.estimateTransactionFeesForWrite({ address, functionName: "evaluate_grant", args });
+      const fees = await withGenlayerRetry(() => client.estimateTransactionFeesForWrite({ address, functionName: "evaluate_grant", args }));
       await update({ status: "broadcasting" });
       const hash = String(await client.writeContract({ address, functionName: "evaluate_grant", args, fees: { distribution: fees.distribution, messageAllocations: fees.messageAllocations, feeValue: fees.feeValue } } as never));
-      await update({ status: "submitted", genlayerTxHash: hash, genlayerStatus: "PENDING", explorerUrl: `${(process.env.GENLAYER_EXPLORER_URL || "https://explorer-studio-dev.genlayer.com").replace(/\/$/, "")}/tx/${hash}`, error: "" });
+      await update({ status: "submitted", genlayerTxHash: hash, genlayerStatus: "PENDING", explorerUrl: `${(process.env.GENLAYER_EXPLORER_URL || "https://explorer-studio-dev.genlayer.com").replace(/\/$/, "")}/tx/${hash}`, error: "", message: "" });
       await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "evaluating", updatedAt: new Date() } });
       return;
     }
-    const state = transactionState(await genlayerClient().getTransaction({ hash: String(job.genlayerTxHash) as never }) as unknown as Record<string, unknown>);
-    await update({ genlayerStatus: state.status });
-    if (state.disputed) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "consensus_disputed", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "consensus_disputed", error: "GenLayer consensus is undetermined or disputed. No grant recommendation exists yet." }); return; }
-    if (state.executionFailed) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "evaluation_unavailable", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "evaluation_unavailable", error: "GenLayer finalized the transaction without a valid grant evaluation." }); return; }
-    if (state.canceled) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "transaction_failed", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "transaction_failed", error: "The GenLayer grant evaluation was canceled." }); return; }
-    if (!state.finalized) { await update({ status: "evaluating", error: "" }); return; }
-    const evaluation = await finalizedGrantEvaluation(String(application.grantId), applicationId, address);
+    const transaction = await readTransaction(String(job.genlayerTxHash));
+    const state = transactionState(transaction);
+    const readAddress = transactionEvaluator(transaction, address);
+    await update({ genlayerStatus: state.status, evaluatorAddress: readAddress });
+    if (state.disputed) {
+      // Undetermined consensus: show the leader's assessment for transparency, but it recommends nothing.
+      const advisory = tryNormalizeEvaluation(receiptEvaluation(transaction), String(application.grantId), applicationId, "grant");
+      await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "consensus_disputed", evaluation: advisory, consensusReached: false, genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } });
+      await update({ status: "consensus_disputed", consensusReached: false, error: "GenLayer consensus is undetermined or disputed. No grant recommendation exists yet.", message: advisory ? "This grant's validators did not reach consensus on your application. The leader validator's assessment below is advisory only — it is not a funding recommendation. You can revise and resubmit." : "This grant's validators did not reach consensus on your application, and no advisory assessment could be recovered. You can revise and resubmit." });
+      return;
+    }
+    if (state.executionFailed) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "evaluation_unavailable", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "evaluation_unavailable", error: "GenLayer finalized the transaction without a valid grant evaluation.", message: "GenLayer finalized this review without producing a valid evaluation. You can revise and resubmit your application." }); return; }
+    if (state.canceled) { await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "transaction_failed", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } }); await update({ status: "transaction_failed", error: "The GenLayer grant evaluation was canceled.", message: "GenLayer canceled this review. You can resubmit your application." }); return; }
+    if (!state.finalized) { await update({ status: "evaluating", error: "", message: "" }); return; }
+    // The receipt already carries what evaluate_grant returned, so no contract read is needed here.
+    let evaluation = tryNormalizeEvaluation(receiptEvaluation(transaction), String(application.grantId), applicationId, "grant");
+    if (!evaluation) {
+      try { evaluation = await finalizedGrantEvaluation(String(application.grantId), applicationId, readAddress); }
+      catch (error) {
+        const text = safeError(error).toLowerCase();
+        if (!text.includes("keyerror") && !text.includes("execution failed")) throw error;
+        await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status: "evaluation_unavailable", genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } });
+        await update({ status: "evaluation_unavailable", error: safeError(error), message: userMessage(error) });
+        return;
+      }
+    }
     if (String(evaluation.rules_version) !== grantRulesVersion(grant)) throw new HttpError(409, "The grant review used a different requirements version.");
     const status = evaluation.decision === "fund" ? "recommended_for_funding" : evaluation.decision === "revise" ? "corrections_required" : evaluation.decision === "escalate" ? "further_review" : "rejected";
-    await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status, evaluation, genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } });
-    await update({ status: "complete", error: "" });
+    await db.collection("grantApplications").updateOne({ _id: application._id }, { $set: { status, evaluation, consensusReached: true, genlayerTxHash: job.genlayerTxHash, updatedAt: new Date() } });
+    await update({ status: "complete", error: "", message: "" });
   } catch (error) {
-    await update({ status: job.status === "broadcasting" ? "submission_unknown" : String(job.status || "queued"), error: safeError(error) });
+    // A capacity rejection proves the node never queued the transaction, so the job can safely requeue.
+    const rejected = job.status === "broadcasting" && isRejectedBeforeBroadcast(error);
+    await update({ status: rejected ? "queued" : job.status === "broadcasting" ? "submission_unknown" : String(job.status || "queued"), error: safeError(error), message: userMessage(error) });
   } finally {
     await db.collection("grantJobs").updateOne({ applicationId, lease }, { $unset: { lease: "", leaseUntil: "" } });
   }

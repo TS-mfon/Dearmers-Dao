@@ -3,7 +3,7 @@ import { ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSessionHeaders } from "../lib/session";
-import { reviewLabel, reviewPending, type EvidenceFinding, type ExecutionJob, type Proposal, type ReviewCapabilities, type ReviewJob } from "../../shared/proposals";
+import { reviewAdvisory, reviewLabel, reviewMessage, reviewPending, reviewSettled, type EvidenceFinding, type ExecutionJob, type Proposal, type ReviewCapabilities, type ReviewJob } from "../../shared/proposals";
 
 export type ProposalResponse = { proposal: Proposal; job: ReviewJob | null; executionJob?: ExecutionJob | null; capabilities: ReviewCapabilities; canVote: boolean; vote?: { status: string; txHash?: string; support: boolean } | null };
 type SourceRecord = EvidenceFinding & { content?: string };
@@ -97,7 +97,8 @@ export function ProposalReview({ daoId, proposalId, onUpdate }: { daoId: string;
     finally { setBusy(""); }
   }, [url, headers, load]);
   useEffect(() => {
-    if (!data || (!reviewPending(data.proposal.status) && !["active_voting", "passed", "execution_pending"].includes(data.proposal.status))) return;
+    // A settled job cannot change without a member action, and polling it burns GenLayer execution slots.
+    if (!data || reviewSettled(data.job) || (!reviewPending(data.proposal.status) && !["active_voting", "passed", "execution_pending"].includes(data.proposal.status))) return;
     const timer = window.setInterval(() => {
       if (document.hidden || busy) return;
       if (data.capabilities.canRefresh) void run("refresh-review");
@@ -109,12 +110,16 @@ export function ProposalReview({ daoId, proposalId, onUpdate }: { daoId: string;
   if (!data) return <section className="evaluation-panel"><p role={error ? "alert" : "status"}>{error || "Loading proposal review…"}</p>{error && <button className="ghost-button" onClick={() => void load().catch((reason: Error) => setError(reason.message))}>Try again</button>}</section>;
   const { proposal, job, executionJob, capabilities } = data;
   const evaluation = proposal.evaluation;
+  const advisory = reviewAdvisory(proposal.status, job);
+  const notice = reviewMessage(job);
   return <section className="evaluation-panel" aria-label="AI review">
     <span className="eyebrow"><ShieldCheck size={14} /> GENLAYER REVIEW</span>
     <h3 aria-live="polite">{reviewLabel(proposal.status, job)}</h3>
     <p>{evaluation?.reasoning || evaluation?.critique || "Claims and evidence are unverified until independently evaluated against this DAO’s mission and constitution. AI approval opens member voting; it does not transfer funds."}</p>
     {job?.genlayerStatus && <p className="hint">Network: {job.genlayerStatus} · {job.updatedAt ? `Updated ${new Date(job.updatedAt).toLocaleTimeString()}` : ""}</p>}
-    {(error || job?.error || executionJob?.error) && <p className="notice error" role="alert">{error || job?.error || executionJob?.error}</p>}
+    {error && <p className="notice error" role="alert">{error}</p>}
+    {!error && advisory && <p className="notice" role="status">{notice || "This DAO’s validators did not reach consensus on this review. Anything shown below is advisory only — it does not open member voting."}</p>}
+    {!error && !advisory && (notice || executionJob?.error) && <p className="notice error" role="alert">{notice || executionJob?.error}</p>}
     <div className="admin-actions">
       {capabilities.canStart && <button className="primary-button" disabled={Boolean(busy)} onClick={() => void run("start-review")}>{busy === "start-review" ? "Submitting review…" : "Start AI Review"}</button>}
       {capabilities.canRetry && <button className="primary-button" disabled={Boolean(busy)} onClick={() => void run("retry-review")}>{job?.status === "relay_failed" ? "Complete Review Relay" : "Retry AI Review"}</button>}
@@ -126,8 +131,8 @@ export function ProposalReview({ daoId, proposalId, onUpdate }: { daoId: string;
     {executionJob && <p className="hint">Execution: {executionJob.status.replaceAll("_", " ")}{executionJob.paymentHash ? " · payment confirmed" : ""}</p>}
     {capabilities.canRecover && <form className="stack" onSubmit={(event) => { event.preventDefault(); void run("recover-review", recoveryHash); }}><label>Finalized GenLayer transaction hash<input value={recoveryHash} onChange={(event) => setRecoveryHash(event.target.value)} placeholder="0x…" pattern="0x[a-fA-F0-9]{64}" required /></label><button className="ghost-button" disabled={Boolean(busy)}>Recover submitted review</button></form>}
     {evaluation && <details className="review-evidence" open>
-      <summary>Evidence and evaluation report</summary>
-      <div className="evaluation-metrics"><span>Outcome <strong>{evaluation.outcome?.replaceAll("_", " ") || evaluation.decision}</strong></span>{evaluation.score !== undefined && <span>Score <strong>{evaluation.score}/100</strong></span>}{evaluation.fit_score !== undefined && <span>Fit <strong>{evaluation.fit_score}/100</strong></span>}{evaluation.risk !== undefined && <span>Risk <strong>{evaluation.risk}/100</strong></span>}</div>
+      <summary>{advisory ? "Advisory assessment — no consensus reached" : "Evidence and evaluation report"}</summary>
+      <div className="evaluation-metrics">{advisory && <span>Consensus <strong>Not reached</strong></span>}<span>Outcome <strong>{evaluation.outcome?.replaceAll("_", " ") || evaluation.decision}</strong></span>{evaluation.score !== undefined && <span>Score <strong>{evaluation.score}/100</strong></span>}{evaluation.fit_score !== undefined && <span>Fit <strong>{evaluation.fit_score}/100</strong></span>}{evaluation.risk !== undefined && <span>Risk <strong>{evaluation.risk}/100</strong></span>}</div>
       <FindingSection title="Reasoning" value={evaluation.reasoning || evaluation.critique} />
       <FindingSection title="Weak spots" value={evaluation.weak_spots} />
       <FindingSection title="Required corrections" value={evaluation.corrections} />

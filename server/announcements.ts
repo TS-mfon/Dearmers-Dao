@@ -9,7 +9,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
   try {
     const db = await database();
-    if (req.method === "GET") return json(res, 200, { announcements: await db.collection("announcements").find({ daoId: String(req.query.daoId || "") }).sort({ createdAt: -1 }).limit(50).toArray() });
+    if (req.method === "GET") return json(res, 200, { announcements: await db.collection("announcements").find({ daoId: String(req.query.daoId || "") }).project({ createdBy: 0 }).sort({ createdAt: -1 }).limit(50).toArray() });
     const identity = await requirePrivyIdentity(req.headers.authorization);
     const { daoId, title, body, ctaUrl } = req.body || {};
     if (!daoId || !title || !body) return json(res, 400, { error: "DAO, title, and body are required." });

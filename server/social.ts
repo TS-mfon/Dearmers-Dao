@@ -37,7 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const wallet = walletOf(req.query.wallet);
       if (!identity && !wallet) return json(res, 400, { error: "A session or wallet is required." });
       const collection = kind === "bookmarks" ? "bookmarks" : "follows";
-      return json(res, 200, { items: await db.collection(collection).find(identity ? { actor: identity.sub } : { follower: wallet }).sort({ createdAt: -1 }).limit(100).toArray() });
+      return json(res, 200, { items: await db.collection(collection).find(identity ? { actor: identity.sub } : { follower: wallet }).project({ actor: 0 }).sort({ createdAt: -1 }).limit(100).toArray() });
     }
     const body = req.body || {};
     const privy = await bearerIdentity(req.headers.authorization).catch(() => null);
