@@ -5,6 +5,7 @@ import { errorResponse, method, json } from "./_http.js";
 import { verifyWallet } from "./_auth.js";
 import { ObjectId } from "mongodb";
 import { baseClient, registryAbi } from "./_chain.js";
+import { publicDaoProjection } from "./_profiles.js";
 async function resolveDaoMedia(db: Awaited<ReturnType<typeof database>>, dao: Record<string, unknown>) {
   const daoId = String(dao.daoId || "");
   const mediaIds = { logo: String(dao.logoMediaId || ""), banner: String(dao.bannerMediaId || "") };
@@ -22,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "GET") {
       const daoId = String(req.query.daoId || "").trim();
       if (daoId) {
-        const found = await db.collection("daoIndex").findOne({ daoId, banned: { $ne: true } }, { projection: { _id: 0 } });
+        const found = await db.collection("daoIndex").findOne({ daoId, banned: { $ne: true } }, { projection: publicDaoProjection });
         const dao = found ? await resolveDaoMedia(db, found) : null;
         if (!dao) return json(res, 404, { error: "DAO not found." });
         const memberCount = await db.collection("daoMembers").countDocuments({ daoId, status: "active" });
@@ -30,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const query = String(req.query.q || "").trim();
       const filter = query ? { $or: [{ name: new RegExp(query, "i") }, { description: new RegExp(query, "i") }, { category: new RegExp(query, "i") }], banned: { $ne: true } } : { banned: { $ne: true } };
-      const records = await db.collection("daoIndex").find(filter).sort({ mode: -1, updatedAt: -1 }).limit(100).project({ _id: 0 }).toArray();
+      const records = await db.collection("daoIndex").find(filter).sort({ mode: -1, updatedAt: -1 }).limit(100).project(publicDaoProjection).toArray();
       const memberCounts = await db.collection("daoMembers").aggregate<{ _id: string; count: number }>([
         { $match: { status: "active", daoId: { $in: records.map((record) => String(record.daoId || "")) } } },
         { $group: { _id: "$daoId", count: { $sum: 1 } } },

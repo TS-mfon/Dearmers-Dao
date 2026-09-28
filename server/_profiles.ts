@@ -27,6 +27,13 @@ export async function displayNames(db: Db, actors: Array<string | undefined | nu
 /** True for a Privy DID in either its bare (`did:privy:…`) or profile-prefixed (`privy:did:privy:…`) spelling. */
 export const isIdentity = (value: unknown) => /(^|:)did:/.test(String(value || ""));
 
+/**
+ * Projection for any `daoIndex` read whose result reaches a client. `adminIdentity` holds the
+ * founder's Privy DID and exists only so `dao-auth.ts` can authorize the DAO admin — it is never
+ * read by the frontend, so it must not be served. Use this instead of a bare `{ _id: 0 }`.
+ */
+export const publicDaoProjection = { _id: 0, adminIdentity: 0 } as const;
+
 /** Public-facing name for an actor. Never returns a Privy DID. */
 export function actorLabel(profile?: ActorProfile, fallbackWallet?: string | null) {
   const wallet = String(fallbackWallet || "");

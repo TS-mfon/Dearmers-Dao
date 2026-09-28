@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { actorLabel, isIdentity } from "../server/_profiles.js";
+import { readFileSync } from "node:fs";
+import { actorLabel, isIdentity, publicDaoProjection } from "../server/_profiles.js";
 
 describe("isIdentity", () => {
   it("recognizes a Privy DID in both spellings", () => {
@@ -49,5 +50,23 @@ describe("actorLabel", () => {
   it("does not truncate something that is not a wallet address", () => {
     assert.equal(actorLabel(undefined, "0xnot-a-wallet"), "DAO member");
     assert.equal(actorLabel(undefined, "protocol:password"), "DAO member");
+  });
+});
+
+describe("publicDaoProjection", () => {
+  it("withholds the founder's Privy DID and the raw object id", () => {
+    assert.deepEqual({ ...publicDaoProjection }, { _id: 0, adminIdentity: 0 });
+  });
+
+  // Regression guard: /api/daos and /api/search served daoIndex documents with a bare
+  // `{ _id: 0 }`, which published `adminIdentity` — the founder's Privy DID — to anyone.
+  // Any new client-facing daoIndex read must go through the shared projection.
+  it("is used by every daoIndex read that reaches a client", () => {
+    for (const file of ["server/daos.ts", "server/search.ts"]) {
+      const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+      for (const read of source.split("\n").filter((line) => line.includes('collection("daoIndex")') && /\.project\(|projection:/.test(line))) {
+        assert.ok(read.includes("publicDaoProjection"), `${file} serves daoIndex without publicDaoProjection: ${read.trim().slice(0, 120)}`);
+      }
+    }
   });
 });
