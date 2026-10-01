@@ -20,10 +20,15 @@ export function reviewCapabilities(status: string, job: ReviewJob | null, author
   const uncertain = ["broadcasting", "submission_unknown"].includes(job?.status || "");
   const syncingPolicy = job?.status === "syncing_policy";
   const noHash = !job?.genlayerTxHash;
-  const disputed = authorized && job?.status === "consensus_disputed";
+  /**
+   * Retry depends on the job, not on the proposal's status. A job that ends `evaluation_unavailable`
+   * leaves the proposal sitting in `evaluating`, and tying retry to that pending status meant the
+   * button's presence relied on the mismatch rather than on the job actually being recoverable.
+   */
+  const recoverable = ["relay_failed", "failed", "transaction_failed", "evaluation_unavailable", "consensus_disputed"].includes(job?.status || "");
   return {
     canStart: pending && noHash && !uncertain && !syncingPolicy && job?.status !== "submitting",
-    canRetry: (pending || disputed) && Boolean(job?.genlayerTxHash) && ["relay_failed", "failed", "transaction_failed", "evaluation_unavailable", "consensus_disputed"].includes(job?.status || ""),
+    canRetry: authorized && recoverable && Boolean(job?.genlayerTxHash),
     canRefresh: pending && !reviewSettled(job) && (Boolean(job?.genlayerTxHash) || syncingPolicy),
     canRecover: pending && noHash && uncertain,
     canReplace: authorized && ["corrections_required", "rejected_by_genlayer", "escalated", "consensus_disputed"].includes(status),

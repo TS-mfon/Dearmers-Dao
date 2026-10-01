@@ -176,3 +176,68 @@ describe("reviewLabel", () => {
     assert.equal(reviewLabel("passed", null), "Review finalized");
   });
 });
+
+/**
+ * Recovery from a finalized-but-unreadable review. Observed in production on October 1, 2026:
+ * four proposals sat at `proposal.status = "evaluating"` with `job.status =
+ * "evaluation_unavailable"` and `genlayerStatus = "FINALIZED"`, after 37-94 attempts. Pressing
+ * Retry answered "The original transaction has not definitively failed." and submitted nothing,
+ * because the retry guard required the original transaction to have *failed* -- and this one had
+ * succeeded. Only its stored verdict could not be read.
+ */
+describe("retrying a review whose verdict could not be read", () => {
+  const unreadable = job({ status: "evaluation_unavailable", genlayerTxHash: "0xabc", genlayerStatus: "FINALIZED" });
+
+  it("offers Retry to the proposal's owner", () => {
+    assert.equal(reviewCapabilities("evaluating", unreadable, true).canRetry, true);
+  });
+
+  /**
+   * Retry must not depend on the proposal still looking pending. The job going terminal leaves
+   * `proposal.status` at `evaluating`, and the old rule only offered Retry because of that
+   * mismatch -- so correcting the mismatch would silently have removed the only way out.
+   */
+  it("offers Retry regardless of the proposal's own status", () => {
+    for (const status of ["evaluating", "evaluation_unavailable", "corrections_required", "rejected_by_genlayer", "active_voting"]) {
+      assert.equal(reviewCapabilities(status, unreadable, true).canRetry, true, status);
+    }
+  });
+
+  it("offers Retry for every other recoverable job state too", () => {
+    for (const status of ["relay_failed", "failed", "transaction_failed", "evaluation_unavailable", "consensus_disputed"]) {
+      assert.equal(reviewCapabilities("evaluating", job({ status, genlayerTxHash: "0xabc" }), true).canRetry, true, status);
+    }
+  });
+
+  it("never offers Retry to someone who cannot act on it", () => {
+    assert.equal(reviewCapabilities("evaluating", unreadable, false).canRetry, false);
+  });
+
+  // Without a transaction there is nothing to discard; that is Start's job, not Retry's.
+  it("does not offer Retry when no transaction was ever recorded", () => {
+    assert.equal(reviewCapabilities("evaluating", job({ status: "evaluation_unavailable" }), true).canRetry, false);
+  });
+
+  it("does not offer Retry while a review is still running", () => {
+    for (const status of ["queued", "submitting", "broadcasting", "submitted", "evaluating", "relaying", "syncing_policy"]) {
+      assert.equal(reviewCapabilities("evaluating", job({ status, genlayerTxHash: "0xabc" }), true).canRetry, false, status);
+    }
+  });
+
+  it("still treats the state as settled, so background passes do not spend an RPC slot on it", () => {
+    assert.equal(reviewSettled(unreadable), true);
+  });
+
+  it("describes the state without claiming the transaction failed", () => {
+    const label = reviewLabel("evaluating", unreadable);
+    assert.equal(label, "Finalized · evaluation execution failed");
+    assert.ok(!label.toLowerCase().includes("under ai review"), "a terminal job must not read as still in review");
+  });
+
+  // The member-facing sentence must say it is retryable, and must not carry the internal text.
+  it("tells the member a retry will run a fresh evaluation", () => {
+    const message = reviewMessage({ ...unreadable, error: "KeyError: 'proposal:42'", message: "GenLayer finalized this review without producing a valid evaluation. Retry the review to run a fresh evaluation." });
+    assert.match(message, /retry/i);
+    assert.ok(!message.includes("KeyError"));
+  });
+});

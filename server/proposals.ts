@@ -8,7 +8,7 @@ import { bearerIdentity, requirePrivyIdentity, verifiedEmbeddedWallet } from "./
 import { verifyWallet } from "./_auth.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { reconcileReview } from "./_proposal-jobs.js";
-import { reviewCapabilities, reviewMessage, type ReviewJob } from "../shared/proposals.js";
+import { reviewCapabilities, reviewMessage, reviewPending, type ReviewJob } from "../shared/proposals.js";
 import { reconcileProposalExecution } from "./_automation.js";
 import { syncProposalState } from "./_proposal-state.js";
 import { actorLabel, displayNames } from "./_profiles.js";
@@ -31,6 +31,27 @@ async function startReviewWithin(proposalId: string, timeoutMs = 8_000) {
   finally { if (timer) clearTimeout(timer); }
 }
 
+/**
+ * Advances an in-flight review when its proposal is read.
+ *
+ * `reconcileApplication` sweeps these jobs, but nothing invokes it on a schedule: vercel.json
+ * declares no crons, and this project's Hobby plan caps cron jobs at one run per day, which is far
+ * too coarse for a review that settles in minutes. So a job submitted to GenLayer would sit at
+ * `evaluating` until a member happened to press Refresh. Opening the proposal now does what the
+ * missing cron would have.
+ *
+ * `reconcileReview` returns immediately for a settled job, so this costs an RPC read only while a
+ * review is genuinely outstanding, and its lease keeps concurrent readers from duplicating work.
+ * The race bounds the page load: whatever has not finished keeps running for the next reader.
+ */
+async function advanceReviewWithin(proposalId: string, timeoutMs = 5_000) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const advanced = reconcileReview(proposalId).then(() => true, () => false);
+  const timed = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); });
+  try { return await Promise.race([advanced, timed]); }
+  finally { if (timer) clearTimeout(timer); }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET", "POST"])) return;
   res.setHeader("Cache-Control", "no-store");
@@ -49,6 +70,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           await syncProposalState(proposal);
           proposal = await db.collection("proposals").findOne({ _id: proposal._id }) || proposal;
         } catch (error) { console.error("Proposal state refresh failed:", error); }
+      }
+      // Reading a proposal whose review is still outstanding advances it, because no scheduler does.
+      if (req.method === "GET" && reviewPending(String(proposal.status))) {
+        await advanceReviewWithin(proposalId);
+        proposal = await db.collection("proposals").findOne({ _id: proposal._id }) || proposal;
       }
       const daoAdmin = identity ? await findDaoForIdentity(db, proposal.daoId, identity) : null;
       const authorized = Boolean(identity && (identity.sub === proposal.actor || daoAdmin));

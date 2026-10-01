@@ -76,11 +76,42 @@ export async function reconcileReview(proposalId: string, start = false, recover
       return;
     }
     if (["transaction_failed", "evaluation_unavailable", "consensus_disputed"].includes(String(job.status)) && start) {
-      const state = transactionState(await readTransaction(String(job.genlayerTxHash)));
-      if (!state.failed && !state.disputed) throw new HttpError(409, "The original transaction has not definitively failed.");
-      await db.collection("proposalJobs").updateOne({ proposalId, lease }, { $push: { previousTransactions: job.genlayerTxHash }, $unset: { genlayerTxHash: "", explorerUrl: "", consensusReached: "" }, $set: { status: "queued", error: "", message: "" } });
-      await db.collection("proposals").updateOne({ _id: proposal._id }, { $set: { status: "awaiting_ai_review" }, $unset: { consensusReached: "" } });
-      return;
+      const transaction = await readTransaction(String(job.genlayerTxHash));
+      const state = transactionState(transaction);
+      const readAddress = transactionEvaluator(transaction, address);
+
+      /**
+       * `evaluation_unavailable` means GenLayer finalized successfully but its stored verdict could
+       * not be read. The run itself was fine, so try to read it once more -- from the receipt first,
+       * then the contract -- before spending another evaluation. This recovers the common case,
+       * where the earlier read hit a transient KeyError, at no cost.
+       */
+      if (job.status === "evaluation_unavailable" && state.finalized && state.successful && !state.disputed) {
+        const recovered = tryNormalizeEvaluation(receiptEvaluation(transaction), proposal.daoId, proposalId, "proposal")
+          || await finalizedEvaluation(proposal.daoId, proposalId, readAddress).catch(() => null);
+        if (recovered && String(recovered.rules_version) === String(proposal.rulesVersion || dao.rulesVersion)) {
+          await update({ status: "relaying", error: "", message: "" });
+          await relayReview(proposal, job, recovered);
+          return;
+        }
+      }
+
+      /**
+       * Otherwise discard this transaction and run a fresh evaluation. Refuse only while the
+       * transaction is still in flight, because requeueing then would abandon a run that may yet
+       * produce a verdict. The previous guard demanded the transaction had *failed*, which made
+       * `evaluation_unavailable` unrecoverable: its transaction succeeded, so retry answered
+       * "The original transaction has not definitively failed." and no new run was ever submitted.
+       */
+      if (!state.finalized && !state.disputed && !state.canceled) {
+        throw new HttpError(409, "This review is still running on GenLayer. Refresh it; retry only once it has finished.");
+      }
+      // The lease is released here rather than in `finally` so the resubmission below can claim it.
+      await db.collection("proposalJobs").updateOne({ proposalId, lease }, { $push: { previousTransactions: job.genlayerTxHash }, $unset: { genlayerTxHash: "", explorerUrl: "", consensusReached: "", lease: "", leaseUntil: "" }, $set: { status: "queued", error: "", message: "" } });
+      await db.collection("proposals").updateOne({ _id: proposal._id }, { $set: { status: "awaiting_ai_review", updatedAt: new Date() }, $unset: { consensusReached: "" } });
+      // Submit the replacement now. Returning here left the job merely queued, which is why
+      // "Retry AI Review" appeared to do nothing until the member pressed Start a second time.
+      return await reconcileReview(proposalId, true);
     }
     const transaction = await readTransaction(String(job.genlayerTxHash));
     const state = transactionState(transaction);
