@@ -6,14 +6,45 @@ let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 
 export type PrivyIdentity = JWTPayload & { sub: string; email?: string; wallet?: string };
 
+/**
+ * jose codes that mean the presented token is the problem. `ERR_JWKS_NO_MATCHING_KEY` belongs
+ * here too: the key id is absent from a JWKS we did fetch, so the token is stale or foreign.
+ */
+const REJECTED_TOKEN_CODES = new Set([
+  "ERR_JWT_EXPIRED",
+  "ERR_JWT_CLAIM_VALIDATION_FAILED",
+  "ERR_JWT_INVALID",
+  "ERR_JWS_INVALID",
+  "ERR_JWS_SIGNATURE_VERIFICATION_FAILED",
+  "ERR_JOSE_ALG_NOT_ALLOWED",
+  "ERR_JWKS_NO_MATCHING_KEY",
+]);
+
+/**
+ * Classifies a token verification failure. Privy access tokens are short-lived, so any tab left
+ * open hits expiry; jose threw a raw `JWTExpired`, which is not an HttpError, so errorResponse
+ * answered 500 and safeError showed the member `"exp" claim timestamp check failed`. A JWKS
+ * outage is deliberately kept separate — telling someone to sign in again cannot fix our network.
+ */
+export function tokenError(error: unknown): HttpError {
+  if (error instanceof HttpError) return error;
+  const code = String((error as { code?: unknown })?.code || "");
+  if (REJECTED_TOKEN_CODES.has(code)) return new HttpError(401, "Your session expired. Sign in again.");
+  if (code.startsWith("ERR_JWKS_")) return new HttpError(503, "Sign-in verification is temporarily unavailable. Try again shortly.");
+  return new HttpError(503, "Sign-in verification is temporarily unavailable. Try again shortly.");
+}
+
 export async function verifyPrivyToken(token: string): Promise<PrivyIdentity> {
-  if (!jwksUrl) throw new Error("PRIVY_JWKS_ENDPOINT is not configured.");
+  if (!jwksUrl) {
+    console.error("Privy verification unavailable: PRIVY_JWKS_ENDPOINT is not configured.");
+    throw new HttpError(503, "Sign-in verification is not fully configured yet. The team has been notified.");
+  }
   jwks ||= createRemoteJWKSet(new URL(jwksUrl));
-  const { payload } = await jwtVerify(token, jwks, {
-    issuer: "privy.io",
-    audience: process.env.PRIVY_APP_ID,
-  });
-  if (!payload.sub) throw new Error("Privy token has no user subject.");
+  let payload: JWTPayload;
+  try {
+    ({ payload } = await jwtVerify(token, jwks, { issuer: "privy.io", audience: process.env.PRIVY_APP_ID }));
+  } catch (error) { throw tokenError(error); }
+  if (!payload.sub) throw new HttpError(401, "Your session is missing an account. Sign in again.");
   return payload as PrivyIdentity;
 }
 

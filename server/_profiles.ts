@@ -34,6 +34,43 @@ export const isIdentity = (value: unknown) => /(^|:)did:/.test(String(value || "
  */
 export const publicDaoProjection = { _id: 0, adminIdentity: 0 } as const;
 
+/**
+ * Fields no client may ever see. `identity` is the member's Privy DID — it was served deliberately
+ * while it was the only public route key, and is withheld now that `handle` routes profiles.
+ * `githubProfile` is a raw third-party API document and `usernameHistory` is a moderation trail.
+ */
+export const NEVER_PUBLIC_PROFILE_FIELDS = ["identity", "banned", "githubProfile", "usernameHistory"] as const;
+
+/**
+ * Fields only the profile's own owner may read back. They must reach the owner: the editor posts
+ * its whole draft, so a GET that omitted them would silently reset both on the next save —
+ * `profileVisibility` and `emailNotifications` are write-defaulted in server/profile.ts.
+ */
+export const OWNER_ONLY_PROFILE_FIELDS = ["email", "emailVerified", "emailNotifications", "profileVisibility"] as const;
+
+/**
+ * Projection for any `profiles` read that reaches a client with no notion of an owner — search,
+ * follower lists, the people directory. Use this instead of a bare `{ _id: 0, email: 0 }`.
+ */
+export const publicProfileProjection = Object.freeze(Object.fromEntries([
+  ["_id", 0],
+  ...NEVER_PUBLIC_PROFILE_FIELDS.map((field) => [field, 0]),
+  ...OWNER_ONLY_PROFILE_FIELDS.map((field) => [field, 0]),
+])) as Record<string, 0>;
+
+/**
+ * Redacts a profile document read without a projection, for the one route that must decide
+ * ownership from the document itself (a handle or wallet lookup does not name an identity).
+ * Derived from the same field lists as `publicProfileProjection`, so the two cannot drift.
+ */
+export function publicProfile(document: Record<string, unknown>, owner = false) {
+  const profile = { ...document };
+  delete profile._id;
+  for (const field of NEVER_PUBLIC_PROFILE_FIELDS) delete profile[field];
+  if (!owner) for (const field of OWNER_ONLY_PROFILE_FIELDS) delete profile[field];
+  return profile;
+}
+
 /** Public-facing name for an actor. Never returns a Privy DID. */
 export function actorLabel(profile?: ActorProfile, fallbackWallet?: string | null) {
   const wallet = String(fallbackWallet || "");

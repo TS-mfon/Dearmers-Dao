@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const existing = await db.collection("daoCreationJobs").findOne({ clientKey, actor: identity.sub });
     if (req.method === "GET") {
       if (!existing) throw new HttpError(404, "Creation job not found.");
-      return json(res, 200, { clientKey, daoId: existing.daoId, daoAddress: existing.daoAddress, txHash: existing.txHash, status: existing.status, indexed: existing.status === "ready", error: existing.error });
+      return json(res, 200, { clientKey, daoId: existing.daoId, daoAddress: existing.daoAddress, txHash: existing.txHash, status: existing.status, indexed: existing.status === "ready", message: existing.message || "" });
     }
     if (!existing) {
       if (body.action === "resume") throw new HttpError(404, "Creation job not found.");
@@ -29,6 +29,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     await reconcileCreation(clientKey);
     const job = await db.collection("daoCreationJobs").findOne({ clientKey, actor: identity.sub });
-    return json(res, 202, { clientKey, daoId: job?.daoId, daoAddress: job?.daoAddress, txHash: job?.txHash, status: job?.status, indexed: job?.status === "ready", error: job?.error });
+    return json(res, 202, { clientKey, daoId: job?.daoId, daoAddress: job?.daoAddress, txHash: job?.txHash, status: job?.status, indexed: job?.status === "ready", message: job?.message || "" });
   } catch (error) { return errorResponse(res, error); }
 }

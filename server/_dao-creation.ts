@@ -3,7 +3,7 @@ import { parseUnits, type Address, type Hex } from "viem";
 import { database } from "./_db.js";
 import { baseClient, baseSigner, confirmed, registryAbi } from "./_chain.js";
 import { syncDaoPolicy } from "./_policy.js";
-import { HttpError, safeError } from "./_http.js";
+import { creationMessage, HttpError, safeError } from "./_http.js";
 
 export async function reconcileCreation(clientKey: string) {
   const db = await database();
@@ -45,11 +45,13 @@ export async function reconcileCreation(clientKey: string) {
     }
     await db.collection("daoMembers").updateOne({ daoId: job.daoId, actor: job.actor }, { $setOnInsert: { daoId: job.daoId, actor: job.actor, wallet: job.admin.toLowerCase(), role: "admin", status: "active", joinedAt: new Date() } }, { upsert: true });
     await db.collection("delegations").updateOne({ creationKey: clientKey, actor: job.actor }, { $set: { daoId: job.daoId, daoAddress: record.dao.toLowerCase(), status: "active" } });
-    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { daoAddress: record.dao.toLowerCase(), status: "syncing_policy", error: "", updatedAt: new Date() } });
+    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { daoAddress: record.dao.toLowerCase(), status: "syncing_policy", error: "", message: "", updatedAt: new Date() } });
     await syncDaoPolicy(job.daoId);
     const dao = await db.collection("daoIndex").findOne({ daoId: job.daoId });
-    if (dao?.policySyncStatus === "ready") await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "ready", indexed: true, error: "", updatedAt: new Date() } });
+    if (dao?.policySyncStatus === "ready") await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "ready", indexed: true, error: "", message: "", updatedAt: new Date() } });
   } catch (error) {
-    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "needs_attention", error: safeError(error), updatedAt: new Date() } });
+    // `error` is the admin-panel diagnostic; `message` is what the status page shows a member.
+    // Storing only `error` is what put raw viem text in the product UI as the page's lede.
+    await db.collection("daoCreationJobs").updateOne({ clientKey }, { $set: { status: "needs_attention", error: safeError(error), message: creationMessage(error), updatedAt: new Date() } });
   } finally { await db.collection("daoCreationJobs").updateOne({ clientKey }, { $unset: { leaseUntil: "" } }); }
 }

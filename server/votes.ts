@@ -33,7 +33,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await requireBaseSignerGas(signer.account.address, "The Base vote relayer");
     const registered = await baseClient().readContract({ address, abi: daoAbi, functionName: "registeredMembers", args: [voter] });
     if (!registered) { const memberHash = await signer.writeContract({ address, abi: daoAbi, functionName: "syncMemberFor", args: [voter, true] }); await confirmed(memberHash); }
-    const inserted = await db.collection("proposalVotes").insertOne({ proposalId, daoId: proposal.daoId, actor: identity.sub, wallet: voter, support: body.support, status: "submitting", createdAt: new Date() });
+    // The read above cannot settle a double submit: two concurrent requests both pass it and the
+    // unique index rejects the loser. Without this, that loser got a raw E11000 naming the database.
+    let inserted;
+    try {
+      inserted = await db.collection("proposalVotes").insertOne({ proposalId, daoId: proposal.daoId, actor: identity.sub, wallet: voter, support: body.support, status: "submitting", createdAt: new Date() });
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) throw new HttpError(409, "This wallet already has a submitted vote. Check its transaction status.");
+      throw error;
+    }
     let hash: Hex | undefined;
     try {
       hash = await signer.writeContract({ address, abi: daoAbi, functionName: "castProposalVoteFor", args: [onchainId, voter, body.support] });

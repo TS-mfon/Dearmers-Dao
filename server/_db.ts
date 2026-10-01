@@ -22,6 +22,11 @@ export async function database(): Promise<Db> {
     await Promise.all([
       profiles.createIndex({ wallet: 1 }, { unique: true, partialFilterExpression: { wallet: { $type: "string" } } }),
       profiles.createIndex({ username: 1 }),
+      // `handle` is the public profile route key, so uniqueness is the invariant that makes
+      // /u/<handle> resolvable. Sparse, so a profile the backfill has not reached is allowed to
+      // have none -- see scripts/migrate-handles.ts, which must run before this index is deployed.
+      profiles.createIndex({ handle: 1 }, { unique: true, sparse: true }),
+      profiles.createIndex({ "usernameHistory.from": 1 }),
       profiles.createIndex({ identity: 1 }, { unique: true, sparse: true }),
       db.collection("daoIndex").createIndex({ daoId: 1 }, { unique: true }),
       db.collection("adminSessions").createIndex({ tokenHash: 1 }, { unique: true }),
@@ -58,6 +63,12 @@ export async function database(): Promise<Db> {
       db.collection("media.files").createIndex({ "metadata.scope": 1, "metadata.resourceId": 1, "metadata.purpose": 1 }),
     ]).then(() => undefined);
   })();
-  await indexesPromise;
+  try { await indexesPromise; }
+  catch (error) {
+    // Caching the rejection would fail every later database() call on this instance, turning one
+    // bad index into a total outage. Clear it so the next request retries.
+    indexesPromise = undefined;
+    throw error;
+  }
   return db;
 }

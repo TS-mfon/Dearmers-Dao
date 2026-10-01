@@ -3,6 +3,7 @@ import { database } from "./_db.js";
 import { errorResponse, method, json } from "./_http.js";
 import { bearerIdentity, requirePrivyIdentity } from "./_privy.js";
 import { reconcileGrantApplication } from "./_grant-jobs.js";
+import { reviewMessage, type ReviewJob } from "../shared/proposals.js";
 
 async function startGrantWithin(applicationId: string, timeoutMs = 8_000) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -60,6 +61,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await db.collection("grantJobs").updateOne({ applicationId }, { $setOnInsert: { applicationId, grantId: String(grant.grantId), status: "queued", createdAt: new Date() } }, { upsert: true });
     const reviewStarted = await startGrantWithin(applicationId);
     const job = await db.collection("grantJobs").findOne({ applicationId }, { projection: { lease: 0, leaseUntil: 0 } });
-    return json(res, 201, { ok: true, application: await db.collection("grantApplications").findOne({ _id: saved!._id }, { projection: { actor: 0 } }), job, warning: job?.message || job?.error || (!reviewStarted ? "Application saved. GenLayer review will continue through automation." : undefined) });
+    return json(res, 201, { ok: true, application: await db.collection("grantApplications").findOne({ _id: saved!._id }, { projection: { actor: 0 } }), job, warning: reviewMessage(job as ReviewJob | null) || (!reviewStarted ? "Application saved. GenLayer review will continue through automation." : undefined) });
   } catch (error) { return errorResponse(res, error); }
 }

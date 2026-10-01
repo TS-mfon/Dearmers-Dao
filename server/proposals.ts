@@ -8,7 +8,7 @@ import { bearerIdentity, requirePrivyIdentity, verifiedEmbeddedWallet } from "./
 import { verifyWallet } from "./_auth.js";
 import { findDaoForIdentity } from "./dao-auth.js";
 import { reconcileReview } from "./_proposal-jobs.js";
-import { reviewCapabilities, type ReviewJob } from "../shared/proposals.js";
+import { reviewCapabilities, reviewMessage, type ReviewJob } from "../shared/proposals.js";
 import { reconcileProposalExecution } from "./_automation.js";
 import { syncProposalState } from "./_proposal-state.js";
 import { actorLabel, displayNames } from "./_profiles.js";
@@ -112,6 +112,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const reviewStarted = await startReviewWithin(id);
     const job = await db.collection("proposalJobs").findOne({ proposalId: id }, { projection: { lease: 0, leaseUntil: 0 } });
     const [created] = await publicProposals(db, [await db.collection("proposals").findOne({ _id: saved!._id }) as Document]);
-    return json(res, 201, { proposal: created, job, warning: job?.message || job?.error || (!reviewStarted ? "Proposal saved. AI review submission is continuing in the background and automation will resume it safely." : undefined) });
+    return json(res, 201, { proposal: created, job, warning: reviewMessage(job as ReviewJob | null) || (!reviewStarted ? "Proposal saved. AI review submission is continuing in the background and automation will resume it safely." : undefined) });
   } catch (error) { return errorResponse(res, error); }
 }

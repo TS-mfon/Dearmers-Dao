@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { Address, Hex } from "viem";
 import { database } from "./_db.js";
-import { errorResponse, method, json } from "./_http.js";
+import { errorResponse, method, json, searchPattern } from "./_http.js";
 import { verifyWallet } from "./_auth.js";
 import { ObjectId } from "mongodb";
 import { baseClient, registryAbi } from "./_chain.js";
@@ -30,7 +30,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return json(res, 200, { dao: { ...dao, memberCount } });
       }
       const query = String(req.query.q || "").trim();
-      const filter = query ? { $or: [{ name: new RegExp(query, "i") }, { description: new RegExp(query, "i") }, { category: new RegExp(query, "i") }], banned: { $ne: true } } : { banned: { $ne: true } };
+      const expression = searchPattern(query);
+      const filter = expression ? { $or: [{ name: expression }, { description: expression }, { category: expression }], banned: { $ne: true } } : { banned: { $ne: true } };
       const records = await db.collection("daoIndex").find(filter).sort({ mode: -1, updatedAt: -1 }).limit(100).project(publicDaoProjection).toArray();
       const memberCounts = await db.collection("daoMembers").aggregate<{ _id: string; count: number }>([
         { $match: { status: "active", daoId: { $in: records.map((record) => String(record.daoId || "")) } } },

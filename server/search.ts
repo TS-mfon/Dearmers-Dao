@@ -1,23 +1,22 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { database } from "./_db.js";
-import { errorResponse, method, json } from "./_http.js";
-import { publicDaoProjection } from "./_profiles.js";
-
-function escapeRegex(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+import { errorResponse, method, json, searchPattern, searchTerm } from "./_http.js";
+import { publicDaoProjection, publicProfileProjection } from "./_profiles.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!method(req, res, ["GET"])) return;
   try {
-    const query = String(req.query.q || "").trim().slice(0, 80);
-    if (!query) return json(res, 200, { query: "", daos: [], profiles: [] });
-    const expression = new RegExp(escapeRegex(query), "i");
+    const query = searchTerm(req.query.q);
+    const expression = searchPattern(req.query.q);
+    if (!expression) return json(res, 200, { query: "", daos: [], profiles: [] });
     const db = await database();
     const [daos, profiles] = await Promise.all([
       db.collection("daoIndex").find({ banned: { $ne: true }, active: { $ne: false }, $or: [{ name: expression }, { description: expression }, { category: expression }, { mission: expression }, { tags: expression }, { dao: expression }] }).sort({ updatedAt: -1 }).limit(20).project(publicDaoProjection).toArray(),
-      // `identity` is a Privy DID and is served deliberately: it is the public profile route key for
-      // wallet-less members (`/profile/identity/<did>` in App.tsx and ProfilePage.tsx). Retiring it
-      // needs a public handle to route on first — see the remaining risks in Memory.md.
-      db.collection("profiles").find({ $or: [{ username: expression }, { displayName: expression }, { github: expression }, { bio: expression }] }).sort({ reputationScore: -1 }).limit(20).project({ _id: 0, email: 0 }).toArray(),
+      // Findable means not banned, not private, and reachable at a URL: a profile with neither a
+      // handle nor a wallet is withheld rather than linked somewhere that cannot resolve. Before
+      // scripts/migrate-handles.ts runs, that is how wallet-less members stay out of results
+      // instead of becoming dead links -- and it is why no DID is needed to navigate to anyone.
+      db.collection("profiles").find({ banned: { $ne: true }, profileVisibility: { $ne: "private" }, $and: [{ $or: [{ handle: { $type: "string" } }, { wallet: { $type: "string" } }] }, { $or: [{ handle: expression }, { username: expression }, { displayName: expression }, { github: expression }, { bio: expression }] }] }).sort({ reputationScore: -1 }).limit(20).project(publicProfileProjection).toArray(),
     ]);
     return json(res, 200, { query, daos, profiles });
   } catch (error) { return errorResponse(res, error); }

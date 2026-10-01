@@ -21,6 +21,22 @@ export function method(req: VercelRequest, res: VercelResponse, allowed: string[
   return true;
 }
 
+/** Makes user input inert inside a Mongo `$regex`. Unescaped input is both a 500 and a ReDoS. */
+export function escapeRegex(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+/** The bounded, trimmed form of a public search box value. */
+export const searchTerm = (value: unknown, maxLength = 80) => String(value ?? "").trim().slice(0, maxLength);
+
+/**
+ * The only way a handler should turn a query string into a Mongo matcher. Returns null for an
+ * empty term so callers branch instead of matching everything. Never build `new RegExp` from
+ * request input directly — `?q=(` used to return 500 from /api/daos and /api/social.
+ */
+export function searchPattern(value: unknown, maxLength = 80) {
+  const term = searchTerm(value, maxLength);
+  return term ? new RegExp(escapeRegex(term), "i") : null;
+}
+
 export function safeError(error: unknown) {
   const source = error && typeof error === "object" ? error as Record<string, unknown> : {};
   const cause = source.cause && typeof source.cause === "object" ? source.cause as Record<string, unknown> : {};
@@ -50,4 +66,21 @@ export function userMessage(error: unknown) {
   if (raw.includes("not configured") || raw.includes("domain is not verified"))
     return "A platform service is not fully configured yet. The team has been notified.";
   return "This review could not be completed. Retry, or contact the DAO stewards if it keeps failing.";
+}
+
+/**
+ * The DAO-creation counterpart to userMessage. Creation failures come from Base and the platform
+ * relayer, not GenLayer, so userMessage's wording would misattribute them. _dao-creation.ts stored
+ * only `error`, which the status page rendered as its lede — raw viem text in the product UI.
+ */
+export function creationMessage(error: unknown) {
+  if (error instanceof HttpError) return error.message;
+  const raw = safeError(error).toLowerCase();
+  if (["insufficient funds", "insufficient balance", "exceeds the balance", "gas required"].some((signal) => raw.includes(signal)))
+    return "The platform relayer could not fund this transaction. The team has been notified.";
+  if (["timeout", "timed out", "etimedout", "econnreset", "socket hang up", "fetch failed", "nonce", "replacement", "502", "503", "504"].some((signal) => raw.includes(signal)))
+    return "Base was temporarily unreachable while creating this DAO. Retry — your progress is saved.";
+  if (raw.includes("not configured"))
+    return "A platform service is not fully configured yet. The team has been notified.";
+  return "DAO creation could not be completed. Retry, or contact the team if it keeps failing.";
 }

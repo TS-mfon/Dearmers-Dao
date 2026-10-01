@@ -34,6 +34,7 @@ before(async () => {
   await Promise.all([
     db.collection("profiles").createIndex({ wallet: 1 }, { unique: true, partialFilterExpression: { wallet: { $type: "string" } } }),
     db.collection("profiles").createIndex({ identity: 1 }, { unique: true, sparse: true }),
+    db.collection("profiles").createIndex({ handle: 1 }, { unique: true, sparse: true }),
     db.collection("follows").createIndex({ actor: 1, target: 1, targetType: 1 }, { unique: true }),
     db.collection("bookmarks").createIndex({ actor: 1, target: 1, targetType: 1 }, { unique: true }),
     db.collection("proposalVotes").createIndex({ proposalId: 1, wallet: 1 }, { unique: true, partialFilterExpression: { wallet: { $type: "string" } } }),
@@ -63,6 +64,28 @@ describe("profile uniqueness", { skip }, () => {
   it("rejects a second profile for the same Privy identity", async () => {
     await db.collection("profiles").insertOne({ wallet: "0xbbb", identity: "privy:did:privy:c" });
     await expectDuplicate(() => db.collection("profiles").insertOne({ wallet: "0xccc", identity: "privy:did:privy:c" }), "a duplicate identity");
+  });
+
+  /**
+   * `handle` is the public profile route key that replaced the Privy DID, so uniqueness is what
+   * makes /u/<handle> resolvable at all. scripts/migrate-handles.ts must report zero duplicates
+   * before this index is deployed: server/_db.ts awaits index creation on cold start, so creating
+   * it while duplicates exist would fail every request on that instance.
+   */
+  it("rejects a second profile claiming the same handle", async () => {
+    await db.collection("profiles").insertOne({ identity: "privy:did:privy:h1", handle: "mfon" });
+    await expectDuplicate(() => db.collection("profiles").insertOne({ identity: "privy:did:privy:h2", handle: "mfon" }), "a duplicate handle");
+  });
+
+  // Sparse, so the backfill can run ahead of the deploy that adds the index.
+  it("allows many profiles with no handle yet", async () => {
+    await db.collection("profiles").insertMany([{ identity: "privy:did:privy:h3" }, { identity: "privy:did:privy:h4" }]);
+    assert.equal(await db.collection("profiles").countDocuments({ handle: { $exists: false } }), 2);
+  });
+
+  it("treats a suffixed handle as a distinct claim", async () => {
+    await db.collection("profiles").insertMany([{ identity: "privy:did:privy:h5", handle: "dave" }, { identity: "privy:did:privy:h6", handle: "dave-2" }]);
+    assert.equal(await db.collection("profiles").countDocuments({ handle: { $in: ["dave", "dave-2"] } }), 2);
   });
 
   // This is the E11000 duplicate-null failure the partial index exists to prevent:

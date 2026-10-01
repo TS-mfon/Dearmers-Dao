@@ -3,7 +3,7 @@ import { createPublicClient, http, isAddress, parseAbi, type Address } from "vie
 import { base, mainnet } from "viem/chains";
 import type { Document } from "mongodb";
 import { database } from "./_db.js";
-import { method, json, safeError } from "./_http.js";
+import { errorResponse, method, json } from "./_http.js";
 import { requirePrivyIdentity, verifiedEmbeddedWallet } from "./_privy.js";
 
 const balanceAbi = parseAbi(["function balanceOf(address owner) view returns (uint256)"]);
@@ -49,5 +49,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     await db.collection("membershipApplications").updateOne({ daoId, actor }, { $set: { daoId, actor, wallet, reason: String(body.reason || "").slice(0, 1000), status: "pending", updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
     return json(res, 200, { ok: true, status: "pending" });
-  } catch (error) { return json(res, 401, { error: safeError(error) }); }
+    // Every other handler uses errorResponse. This one returned *all* failures as 401 with raw
+    // safeError text, so a Base RPC timeout during a token-gate check reached the member as a viem
+    // string under a status code that told the app the session was invalid.
+  } catch (error) { return errorResponse(res, error); }
 }
